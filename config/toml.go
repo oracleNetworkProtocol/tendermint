@@ -41,30 +41,27 @@ func EnsureRoot(rootDir string) {
 	if err := tmos.EnsureDir(filepath.Join(rootDir, defaultDataDir), DefaultDirPerm); err != nil {
 		panic(err.Error())
 	}
-
-	configFilePath := filepath.Join(rootDir, defaultConfigFilePath)
-
-	// Write default config file if missing.
-	if !tmos.FileExists(configFilePath) {
-		writeDefaultConfigFile(configFilePath)
-	}
-}
-
-// XXX: this func should probably be called by cmd/tendermint/commands/init.go
-// alongside the writing of the genesis.json and priv_validator.json
-func writeDefaultConfigFile(configFilePath string) {
-	WriteConfigFile(configFilePath, DefaultConfig())
 }
 
 // WriteConfigFile renders config using the template and writes it to configFilePath.
-func WriteConfigFile(configFilePath string, config *Config) {
+// This function is called by cmd/tendermint/commands/init.go
+func WriteConfigFile(rootDir string, config *Config) {
 	var buffer bytes.Buffer
 
 	if err := configTemplate.Execute(&buffer, config); err != nil {
 		panic(err)
 	}
 
+	configFilePath := filepath.Join(rootDir, defaultConfigFilePath)
+
 	mustWriteFile(configFilePath, buffer.Bytes(), 0644)
+}
+
+func writeDefaultConfigFileIfNone(rootDir string) {
+	configFilePath := filepath.Join(rootDir, defaultConfigFilePath)
+	if !tmos.FileExists(configFilePath) {
+		WriteConfigFile(rootDir, DefaultConfig())
+	}
 }
 
 // Note: any changes to the comments/variables/mapstructure
@@ -88,14 +85,13 @@ proxy-app = "{{ .BaseConfig.ProxyApp }}"
 # A custom human readable name for this node
 moniker = "{{ .BaseConfig.Moniker }}"
 
-# Mode of Node: full | validator | seed (default: "full")
-# You will need to set it to "validator" if you want to run the node as a validator
-# * full node (default)
-#   - all reactors
-#   - No priv_validator_key.json, priv_validator_state.json
+# Mode of Node: full | validator | seed
 # * validator node
 #   - all reactors
 #   - with priv_validator_key.json, priv_validator_state.json
+# * full node
+#   - all reactors
+#   - No priv_validator_key.json, priv_validator_state.json
 # * seed node
 #   - only P2P, PEX Reactor
 #   - No priv_validator_key.json, priv_validator_state.json
@@ -171,7 +167,6 @@ abci = "{{ .BaseConfig.ABCI }}"
 # If true, query the ABCI app on connecting to a new peer
 # so the app can decide if we should keep the connection or not
 filter-peers = {{ .BaseConfig.FilterPeers }}
-
 
 #######################################################################
 ###                 Advanced Configuration Options                  ###
@@ -265,6 +260,12 @@ pprof-laddr = "{{ .RPC.PprofListenAddress }}"
 ###           P2P Configuration Options             ###
 #######################################################
 [p2p]
+
+# Enable the new p2p layer.
+use-new-p2p = {{ .P2P.UseNewP2P }}
+
+# Select the p2p internal queue
+queue-type = "{{ .P2P.QueueType }}"
 
 # Address to listen for incoming connections
 laddr = "{{ .P2P.ListenAddress }}"
@@ -502,15 +503,12 @@ func ResetTestRootWithChainID(testName string, chainID string) *Config {
 	}
 
 	baseConfig := DefaultBaseConfig()
-	configFilePath := filepath.Join(rootDir, defaultConfigFilePath)
 	genesisFilePath := filepath.Join(rootDir, baseConfig.Genesis)
 	privKeyFilePath := filepath.Join(rootDir, baseConfig.PrivValidatorKey)
 	privStateFilePath := filepath.Join(rootDir, baseConfig.PrivValidatorState)
 
 	// Write default config file if missing.
-	if !tmos.FileExists(configFilePath) {
-		writeDefaultConfigFile(configFilePath)
-	}
+	writeDefaultConfigFileIfNone(rootDir)
 	if !tmos.FileExists(genesisFilePath) {
 		if chainID == "" {
 			chainID = "tendermint_test"

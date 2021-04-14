@@ -93,6 +93,13 @@ func DefaultConfig() *Config {
 	}
 }
 
+// DefaultValidatorConfig returns default config with mode as validator
+func DefaultValidatorConfig() *Config {
+	cfg := DefaultConfig()
+	cfg.Mode = ModeValidator
+	return cfg
+}
+
 // TestConfig returns a configuration that can be used for testing
 func TestConfig() *Config {
 	return &Config{
@@ -167,13 +174,13 @@ type BaseConfig struct { //nolint: maligned
 	// A custom human readable name for this node
 	Moniker string `mapstructure:"moniker"`
 
-	// Mode of Node: full | validator | seed (default: "full")
-	// * full (default)
-	//   - all reactors
-	//   - No priv_validator_key.json, priv_validator_state.json
+	// Mode of Node: full | validator | seed
 	// * validator
 	//   - all reactors
 	//   - with priv_validator_key.json, priv_validator_state.json
+	// * full
+	//   - all reactors
+	//   - No priv_validator_key.json, priv_validator_state.json
 	// * seed
 	//   - only P2P, PEX Reactor
 	//   - No priv_validator_key.json, priv_validator_state.json
@@ -346,6 +353,8 @@ func (cfg BaseConfig) ValidateBasic() error {
 	}
 	switch cfg.Mode {
 	case ModeFull, ModeValidator, ModeSeed:
+	case "":
+		return errors.New("no mode has been set")
 	default:
 		return fmt.Errorf("unknown mode: %v", cfg.Mode)
 	}
@@ -598,6 +607,15 @@ type P2PConfig struct { //nolint: maligned
 	// Testing params.
 	// Force dial to fail
 	TestDialFail bool `mapstructure:"test-dial-fail"`
+
+	// Mostly for testing, use rather than environment variables
+	// to turn on the new P2P stack.
+	UseNewP2P bool `mapstructure:"use-new-p2p"`
+
+	// Makes it possible to configure which queue backend the p2p
+	// layer uses. Options are: "fifo", "priority" and "wdrr",
+	// with the default being "fifo".
+	QueueType string `mapstructure:"queue-type"`
 }
 
 // DefaultP2PConfig returns a default configuration for the peer-to-peer layer
@@ -625,6 +643,7 @@ func DefaultP2PConfig() *P2PConfig {
 		HandshakeTimeout:        20 * time.Second,
 		DialTimeout:             3 * time.Second,
 		TestDialFail:            false,
+		QueueType:               "priority",
 	}
 }
 
