@@ -23,6 +23,8 @@ yourself with the syntax.
 By following along with this guide, you'll create a Tendermint Core project
 called kvstore, a (very) simple distributed BFT key-value store.
 
+> Note: please use a released version of Tendermint with this guide. The guides will work with the latest version. Please, do not use master.
+
 ## Built-in app vs external app
 
 Running your application inside the same process as Tendermint Core will give
@@ -40,7 +42,7 @@ Verify that you have the latest version of Go installed:
 
 ```bash
 $ go version
-go version go1.15.x darwin/amd64
+go version go1.16.x darwin/amd64
 ```
 
 ## 1.2 Creating a new Go project
@@ -50,9 +52,12 @@ We'll start by creating a new Go project.
 ```bash
 mkdir kvstore
 cd kvstore
+go mod init github.com/<github_username>/<repo_name>
 ```
 
 Inside the example directory create a `main.go` file with the following content:
+
+> Note: there is no need to clone or fork Tendermint in this tutorial.
 
 ```go
 package main
@@ -207,7 +212,7 @@ etc.) by Tendermint Core.
 
 Valid transactions will eventually be committed given they are not too big and
 have enough gas. To learn more about gas, check out ["the
-specification"](https://docs.tendermint.com/master/spec/abci/apps.html#gas).
+specification"](https://github.com/tendermint/tendermint/blob/master/spec/abci/apps.md#gas).
 
 For the underlying key-value store we'll use
 [badger](https://github.com/dgraph-io/badger), which is an embeddable,
@@ -326,7 +331,7 @@ func (app *KVStoreApplication) Query(reqQuery abcitypes.RequestQuery) (resQuery 
 ```
 
 The complete specification can be found
-[here](https://docs.tendermint.com/master/spec/abci/).
+[here](https://github.com/tendermint/tendermint/tree/master/spec/abci/).
 
 ## 1.4 Starting an application and a Tendermint Core instance in the same process
 
@@ -351,7 +356,7 @@ import (
  tmflags "github.com/tendermint/tendermint/libs/cli/flags"
  "github.com/tendermint/tendermint/libs/log"
  nm "github.com/tendermint/tendermint/node"
- "github.com/tendermint/tendermint/p2p"
+ "github.com/tendermint/tendermint/internal/p2p"
  "github.com/tendermint/tendermint/privval"
  "github.com/tendermint/tendermint/proxy"
 )
@@ -388,7 +393,6 @@ func main() {
  c := make(chan os.Signal, 1)
  signal.Notify(c, os.Interrupt, syscall.SIGTERM)
  <-c
- os.Exit(0)
 }
 
 func newTendermint(app abci.Application, configFile string) (*nm.Node, error) {
@@ -431,7 +435,7 @@ func newTendermint(app abci.Application, configFile string) (*nm.Node, error) {
   config,
   pv,
   nodeKey,
-  proxy.NewLocalClientCreator(app),
+  abcicli.NewLocalClientCreator(app),
   nm.DefaultGenesisDocProviderFunc(config),
   nm.DefaultDBProvider,
   nm.DefaultMetricsProvider(config.Instrumentation),
@@ -483,7 +487,7 @@ node, err := nm.NewNode(
  config,
  pv,
  nodeKey,
- proxy.NewLocalClientCreator(app),
+ abcicli.NewLocalClientCreator(app),
  nm.DefaultGenesisDocProviderFunc(config),
  nm.DefaultDBProvider,
  nm.DefaultMetricsProvider(config.Instrumentation),
@@ -496,7 +500,7 @@ if err != nil {
 `NewNode` requires a few things including a configuration file, a private
 validator, a node key and a few others in order to construct the full node.
 
-Note we use `proxy.NewLocalClientCreator` here to create a local client instead
+Note we use `abcicli.NewLocalClientCreator` here to create a local client instead
 of one communicating through a socket or gRPC.
 
 [viper](https://github.com/spf13/viper) is being used for reading the config,
@@ -564,7 +568,6 @@ defer func() {
 c := make(chan os.Signal, 1)
 signal.Notify(c, os.Interrupt, syscall.SIGTERM)
 <-c
-os.Exit(0)
 ```
 
 ## 1.5 Getting Up and Running
@@ -639,16 +642,13 @@ Now open another tab in your terminal and try sending a transaction:
 ```bash
 $ curl -s 'localhost:26657/broadcast_tx_commit?tx="tendermint=rocks"'
 {
-  "jsonrpc": "2.0",
-  "id": "",
-  "result": {
-    "check_tx": {
-      "gasWanted": "1"
-    },
-    "deliver_tx": {},
-    "hash": "1B3C5A1093DB952C331B1749A21DCCBB0F6C7F4E0055CD04D16346472FC60EC6",
-    "height": "128"
-  }
+  "check_tx": {
+    "gasWanted": "1",
+    ...
+  },
+  "deliver_tx": { ... },
+  "hash": "1B3C5A1093DB952C331B1749A21DCCBB0F6C7F4E0055CD04D16346472FC60EC6",
+  "height": "128"
 }
 ```
 
@@ -659,14 +659,16 @@ Now let's check if the given key now exists and its value:
 ```json
 $ curl -s 'localhost:26657/abci_query?data="tendermint"'
 {
-  "jsonrpc": "2.0",
-  "id": "",
-  "result": {
-    "response": {
-      "log": "exists",
-      "key": "dGVuZGVybWludA==",
-      "value": "cm9ja3M="
-    }
+  "response": {
+    "code": 0,
+    "log": "exists",
+    "info": "",
+    "index": "0",
+    "key": "dGVuZGVybWludA==",
+    "value": "cm9ja3M=",
+    "proofOps": null,
+    "height": "6",
+    "codespace": ""
   }
 }
 ```

@@ -2,12 +2,12 @@ package types
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/tendermint/tendermint/libs/bits"
-	tmjson "github.com/tendermint/tendermint/libs/json"
-	tmsync "github.com/tendermint/tendermint/libs/sync"
 	tmproto "github.com/tendermint/tendermint/proto/tendermint/types"
 )
 
@@ -65,7 +65,7 @@ type VoteSet struct {
 	signedMsgType tmproto.SignedMsgType
 	valSet        *ValidatorSet
 
-	mtx           tmsync.Mutex
+	mtx           sync.Mutex
 	votesBitArray *bits.BitArray
 	votes         []*Vote                // Primary votes to share
 	sum           int64                  // Sum of voting power for seen votes, discounting conflicts
@@ -226,6 +226,10 @@ func (voteSet *VoteSet) getVote(valIndex int32, blockKey string) (vote *Vote, ok
 	return nil, false
 }
 
+func (voteSet *VoteSet) GetVotes() []*Vote {
+	return voteSet.votes
+}
+
 // Assumes signature is valid.
 // If conflicting vote exists, returns it.
 func (voteSet *VoteSet) addVerifiedVote(
@@ -372,7 +376,24 @@ func (voteSet *VoteSet) GetByIndex(valIndex int32) *Vote {
 	}
 	voteSet.mtx.Lock()
 	defer voteSet.mtx.Unlock()
+	if int(valIndex) >= len(voteSet.votes) {
+		return nil
+	}
 	return voteSet.votes[valIndex]
+}
+
+// List returns a copy of the list of votes stored by the VoteSet.
+func (voteSet *VoteSet) List() []Vote {
+	if voteSet == nil || voteSet.votes == nil {
+		return nil
+	}
+	votes := make([]Vote, 0, len(voteSet.votes))
+	for i := range voteSet.votes {
+		if voteSet.votes[i] != nil {
+			votes = append(votes, *voteSet.votes[i])
+		}
+	}
+	return votes
 }
 
 func (voteSet *VoteSet) GetByAddress(address []byte) *Vote {
@@ -420,6 +441,9 @@ func (voteSet *VoteSet) HasTwoThirdsAny() bool {
 }
 
 func (voteSet *VoteSet) HasAll() bool {
+	if voteSet == nil {
+		return false
+	}
 	voteSet.mtx.Lock()
 	defer voteSet.mtx.Unlock()
 	return voteSet.sum == voteSet.valSet.TotalVotingPower()
@@ -492,7 +516,7 @@ func (voteSet *VoteSet) StringIndented(indent string) string {
 func (voteSet *VoteSet) MarshalJSON() ([]byte, error) {
 	voteSet.mtx.Lock()
 	defer voteSet.mtx.Unlock()
-	return tmjson.Marshal(VoteSetJSON{
+	return json.Marshal(VoteSetJSON{
 		voteSet.voteStrings(),
 		voteSet.bitArrayString(),
 		voteSet.peerMaj23s,
@@ -610,6 +634,7 @@ func (voteSet *VoteSet) MakeCommit() *Commit {
 		if commitSig.ForBlock() && !v.BlockID.Equals(*voteSet.maj23) {
 			commitSig = NewCommitSigAbsent()
 		}
+
 		commitSigs[i] = commitSig
 	}
 

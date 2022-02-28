@@ -11,6 +11,18 @@ import (
 	tmproto "github.com/tendermint/tendermint/proto/tendermint/types"
 )
 
+// PrivValidatorType defines the implemtation types.
+type PrivValidatorType uint8
+
+const (
+	MockSignerClient      = PrivValidatorType(0x00) // mock signer
+	FileSignerClient      = PrivValidatorType(0x01) // signer client via file
+	RetrySignerClient     = PrivValidatorType(0x02) // signer client with retry via socket
+	SignerSocketClient    = PrivValidatorType(0x03) // signer client via socket
+	ErrorMockSignerClient = PrivValidatorType(0x04) // error mock signer
+	SignerGRPCClient      = PrivValidatorType(0x05) // signer client via gRPC
+)
+
 // PrivValidator defines the functionality of a local Tendermint validator
 // that signs votes and proposals, and never double signs.
 type PrivValidator interface {
@@ -27,11 +39,11 @@ func (pvs PrivValidatorsByAddress) Len() int {
 }
 
 func (pvs PrivValidatorsByAddress) Less(i, j int) bool {
-	pvi, err := pvs[i].GetPubKey(context.Background())
+	pvi, err := pvs[i].GetPubKey(context.TODO())
 	if err != nil {
 		panic(err)
 	}
-	pvj, err := pvs[j].GetPubKey(context.Background())
+	pvj, err := pvs[j].GetPubKey(context.TODO())
 	if err != nil {
 		panic(err)
 	}
@@ -102,8 +114,8 @@ func (pv MockPV) SignProposal(ctx context.Context, chainID string, proposal *tmp
 	return nil
 }
 
-func (pv MockPV) ExtractIntoValidator(votingPower int64) *Validator {
-	pubKey, _ := pv.GetPubKey(context.Background())
+func (pv MockPV) ExtractIntoValidator(ctx context.Context, votingPower int64) *Validator {
+	pubKey, _ := pv.GetPubKey(ctx)
 	return &Validator{
 		Address:     pubKey.Address(),
 		PubKey:      pubKey,
@@ -113,7 +125,7 @@ func (pv MockPV) ExtractIntoValidator(votingPower int64) *Validator {
 
 // String returns a string representation of the MockPV.
 func (pv MockPV) String() string {
-	mpv, _ := pv.GetPubKey(context.Background()) // mockPV will never return an error, ignored here
+	mpv, _ := pv.GetPubKey(context.TODO()) // mockPV will never return an error, ignored here
 	return fmt.Sprintf("MockPV{%v}", mpv.Address())
 }
 

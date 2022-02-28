@@ -7,6 +7,7 @@ import (
 
 	"github.com/tendermint/tendermint/crypto/ed25519"
 	"github.com/tendermint/tendermint/crypto/secp256k1"
+	"github.com/tendermint/tendermint/crypto/sr25519"
 	"github.com/tendermint/tendermint/crypto/tmhash"
 	tmstrings "github.com/tendermint/tendermint/libs/strings"
 	tmproto "github.com/tendermint/tendermint/proto/tendermint/types"
@@ -24,11 +25,13 @@ const (
 
 	ABCIPubKeyTypeEd25519   = ed25519.KeyType
 	ABCIPubKeyTypeSecp256k1 = secp256k1.KeyType
+	ABCIPubKeyTypeSr25519   = sr25519.KeyType
 )
 
 var ABCIPubKeyTypesToNames = map[string]string{
 	ABCIPubKeyTypeEd25519:   ed25519.PubKeyName,
 	ABCIPubKeyTypeSecp256k1: secp256k1.PubKeyName,
+	ABCIPubKeyTypeSr25519:   sr25519.PubKeyName,
 }
 
 // ConsensusParams contains consensus critical parameters that determine the
@@ -38,6 +41,7 @@ type ConsensusParams struct {
 	Evidence  EvidenceParams  `json:"evidence"`
 	Validator ValidatorParams `json:"validator"`
 	Version   VersionParams   `json:"version"`
+	Synchrony SynchronyParams `json:"synchrony"`
 }
 
 // HashedParams is a subset of ConsensusParams.
@@ -51,15 +55,15 @@ type HashedParams struct {
 // BlockParams define limits on the block size and gas plus minimum time
 // between blocks.
 type BlockParams struct {
-	MaxBytes int64 `json:"max_bytes"`
-	MaxGas   int64 `json:"max_gas"`
+	MaxBytes int64 `json:"max_bytes,string"`
+	MaxGas   int64 `json:"max_gas,string"`
 }
 
 // EvidenceParams determine how we handle evidence of malfeasance.
 type EvidenceParams struct {
-	MaxAgeNumBlocks int64         `json:"max_age_num_blocks"` // only accept new evidence more recent than this
-	MaxAgeDuration  time.Duration `json:"max_age_duration"`
-	MaxBytes        int64         `json:"max_bytes"`
+	MaxAgeNumBlocks int64         `json:"max_age_num_blocks,string"` // only accept new evidence more recent than this
+	MaxAgeDuration  time.Duration `json:"max_age_duration,string"`
+	MaxBytes        int64         `json:"max_bytes,string"`
 }
 
 // ValidatorParams restrict the public key types validators can use.
@@ -69,7 +73,16 @@ type ValidatorParams struct {
 }
 
 type VersionParams struct {
-	AppVersion uint64 `json:"app_version"`
+	AppVersion uint64 `json:"app_version,string"`
+}
+
+// SynchronyParams influence the validity of block timestamps.
+// For more information on the relationship of the synchrony parameters to
+// block validity, see the Proposer-Based Timestamps specification:
+// https://github.com/tendermint/tendermint/blob/master/spec/consensus/proposer-based-timestamp/README.md
+type SynchronyParams struct {
+	Precision    time.Duration `json:"precision,string"`
+	MessageDelay time.Duration `json:"message_delay,string"`
 }
 
 // DefaultConsensusParams returns a default ConsensusParams.
@@ -79,6 +92,7 @@ func DefaultConsensusParams() *ConsensusParams {
 		Evidence:  DefaultEvidenceParams(),
 		Validator: DefaultValidatorParams(),
 		Version:   DefaultVersionParams(),
+		Synchrony: DefaultSynchronyParams(),
 	}
 }
 
@@ -113,6 +127,16 @@ func DefaultVersionParams() VersionParams {
 	}
 }
 
+func DefaultSynchronyParams() SynchronyParams {
+	return SynchronyParams{
+		// 505ms was selected as the default to enable chains that have validators in
+		// mixed leap-second handling environments.
+		// For more information, see: https://github.com/tendermint/tendermint/issues/7724
+		Precision:    505 * time.Millisecond,
+		MessageDelay: 12 * time.Second,
+	}
+}
+
 func (val *ValidatorParams) IsValidPubkeyType(pubkeyType string) bool {
 	for i := 0; i < len(val.PubKeyTypes); i++ {
 		if val.PubKeyTypes[i] == pubkeyType {
@@ -120,6 +144,12 @@ func (val *ValidatorParams) IsValidPubkeyType(pubkeyType string) bool {
 		}
 	}
 	return false
+}
+
+func (params *ConsensusParams) Complete() {
+	if params.Synchrony == (SynchronyParams{}) {
+		params.Synchrony = DefaultSynchronyParams()
+	}
 }
 
 // Validate validates the ConsensusParams to ensure all values are within their
@@ -145,7 +175,7 @@ func (params ConsensusParams) ValidateConsensusParams() error {
 	}
 
 	if params.Evidence.MaxAgeDuration <= 0 {
-		return fmt.Errorf("evidence.MaxAgeDuration must be grater than 0 if provided, Got %v",
+		return fmt.Errorf("evidence.MaxAgeDuration must be greater than 0 if provided, Got %v",
 			params.Evidence.MaxAgeDuration)
 	}
 
@@ -157,6 +187,16 @@ func (params ConsensusParams) ValidateConsensusParams() error {
 	if params.Evidence.MaxBytes < 0 {
 		return fmt.Errorf("evidence.MaxBytes must be non negative. Got: %d",
 			params.Evidence.MaxBytes)
+	}
+
+	if params.Synchrony.MessageDelay <= 0 {
+		return fmt.Errorf("synchrony.MessageDelay must be greater than 0. Got: %d",
+			params.Synchrony.MessageDelay)
+	}
+
+	if params.Synchrony.Precision <= 0 {
+		return fmt.Errorf("synchrony.Precision must be greater than 0. Got: %d",
+			params.Synchrony.Precision)
 	}
 
 	if len(params.Validator.PubKeyTypes) == 0 {
@@ -202,6 +242,8 @@ func (params ConsensusParams) HashConsensusParams() []byte {
 func (params *ConsensusParams) Equals(params2 *ConsensusParams) bool {
 	return params.Block == params2.Block &&
 		params.Evidence == params2.Evidence &&
+		params.Version == params2.Version &&
+		params.Synchrony == params2.Synchrony &&
 		tmstrings.StringSliceEqual(params.Validator.PubKeyTypes, params2.Validator.PubKeyTypes)
 }
 
@@ -232,6 +274,10 @@ func (params ConsensusParams) UpdateConsensusParams(params2 *tmproto.ConsensusPa
 	if params2.Version != nil {
 		res.Version.AppVersion = params2.Version.AppVersion
 	}
+	if params2.Synchrony != nil {
+		res.Synchrony.Precision = params2.Synchrony.Precision
+		res.Synchrony.MessageDelay = params2.Synchrony.MessageDelay
+	}
 	return res
 }
 
@@ -252,6 +298,10 @@ func (params *ConsensusParams) ToProto() tmproto.ConsensusParams {
 		Version: &tmproto.VersionParams{
 			AppVersion: params.Version.AppVersion,
 		},
+		Synchrony: &tmproto.SynchronyParams{
+			MessageDelay: params.Synchrony.MessageDelay,
+			Precision:    params.Synchrony.Precision,
+		},
 	}
 }
 
@@ -271,6 +321,10 @@ func ConsensusParamsFromProto(pbParams tmproto.ConsensusParams) ConsensusParams 
 		},
 		Version: VersionParams{
 			AppVersion: pbParams.Version.AppVersion,
+		},
+		Synchrony: SynchronyParams{
+			MessageDelay: pbParams.Synchrony.MessageDelay,
+			Precision:    pbParams.Synchrony.Precision,
 		},
 	}
 }

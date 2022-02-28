@@ -6,71 +6,78 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/tendermint/tendermint/config"
 	"github.com/tendermint/tendermint/crypto"
-	tmjson "github.com/tendermint/tendermint/libs/json"
+	"github.com/tendermint/tendermint/internal/jsontypes"
+	"github.com/tendermint/tendermint/libs/log"
 	tmnet "github.com/tendermint/tendermint/libs/net"
 	tmos "github.com/tendermint/tendermint/libs/os"
 	"github.com/tendermint/tendermint/privval"
 	tmgrpc "github.com/tendermint/tendermint/privval/grpc"
 )
 
-// ShowValidatorCmd adds capabilities for showing the validator info.
-var ShowValidatorCmd = &cobra.Command{
-	Use:     "show-validator",
-	Aliases: []string{"show_validator"},
-	Short:   "Show this node's validator info",
-	RunE:    showValidator,
-	PreRun:  deprecateSnakeCase,
-}
+// MakeShowValidatorCommand constructs a command to show the validator info.
+func MakeShowValidatorCommand(conf *config.Config, logger log.Logger) *cobra.Command {
+	return &cobra.Command{
+		Use:   "show-validator",
+		Short: "Show this node's validator info",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			var (
+				pubKey crypto.PubKey
+				err    error
+				bctx   = cmd.Context()
+			)
+			//TODO: remove once gRPC is the only supported protocol
+			protocol, _ := tmnet.ProtocolAndAddress(conf.PrivValidator.ListenAddr)
+			switch protocol {
+			case "grpc":
+				pvsc, err := tmgrpc.DialRemoteSigner(
+					bctx,
+					conf.PrivValidator,
+					conf.ChainID(),
+					logger,
+					conf.Instrumentation.Prometheus,
+				)
+				if err != nil {
+					return fmt.Errorf("can't connect to remote validator %w", err)
+				}
 
-func showValidator(cmd *cobra.Command, args []string) error {
-	var (
-		pubKey crypto.PubKey
-		err    error
-	)
+				ctx, cancel := context.WithTimeout(bctx, ctxTimeout)
+				defer cancel()
 
-	//TODO: remove once gRPC is the only supported protocol
-	protocol, _ := tmnet.ProtocolAndAddress(config.PrivValidatorListenAddr)
-	switch protocol {
-	case "grpc":
-		pvsc, err := tmgrpc.DialRemoteSigner(config, config.ChainID(), logger)
-		if err != nil {
-			return fmt.Errorf("can't connect to remote validator %w", err)
-		}
+				pubKey, err = pvsc.GetPubKey(ctx)
+				if err != nil {
+					return fmt.Errorf("can't get pubkey: %w", err)
+				}
+			default:
 
-		ctx, cancel := context.WithTimeout(context.TODO(), ctxTimeout)
-		defer cancel()
+				keyFilePath := conf.PrivValidator.KeyFile()
+				if !tmos.FileExists(keyFilePath) {
+					return fmt.Errorf("private validator file %s does not exist", keyFilePath)
+				}
 
-		pubKey, err = pvsc.GetPubKey(ctx)
-		if err != nil {
-			return fmt.Errorf("can't get pubkey: %w", err)
-		}
-	default:
+				pv, err := privval.LoadFilePV(keyFilePath, conf.PrivValidator.StateFile())
+				if err != nil {
+					return err
+				}
 
-		keyFilePath := config.PrivValidatorKeyFile()
-		if !tmos.FileExists(keyFilePath) {
-			return fmt.Errorf("private validator file %s does not exist", keyFilePath)
-		}
+				ctx, cancel := context.WithTimeout(bctx, ctxTimeout)
+				defer cancel()
 
-		pv, err := privval.LoadFilePV(keyFilePath, config.PrivValidatorStateFile())
-		if err != nil {
-			return err
-		}
+				pubKey, err = pv.GetPubKey(ctx)
+				if err != nil {
+					return fmt.Errorf("can't get pubkey: %w", err)
+				}
+			}
 
-		ctx, cancel := context.WithTimeout(context.TODO(), ctxTimeout)
-		defer cancel()
+			bz, err := jsontypes.Marshal(pubKey)
+			if err != nil {
+				return fmt.Errorf("failed to marshal private validator pubkey: %w", err)
+			}
 
-		pubKey, err = pv.GetPubKey(ctx)
-		if err != nil {
-			return fmt.Errorf("can't get pubkey: %w", err)
-		}
+			fmt.Println(string(bz))
+			return nil
+		},
 	}
 
-	bz, err := tmjson.Marshal(pubKey)
-	if err != nil {
-		return fmt.Errorf("failed to marshal private validator pubkey: %w", err)
-	}
-
-	fmt.Println(string(bz))
-	return nil
 }

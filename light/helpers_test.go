@@ -1,14 +1,19 @@
 package light_test
 
 import (
+	"testing"
 	"time"
+
+	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 
 	"github.com/tendermint/tendermint/crypto"
 	"github.com/tendermint/tendermint/crypto/ed25519"
 	"github.com/tendermint/tendermint/crypto/tmhash"
+	tmtime "github.com/tendermint/tendermint/libs/time"
+	provider_mocks "github.com/tendermint/tendermint/light/provider/mocks"
 	tmproto "github.com/tendermint/tendermint/proto/tendermint/types"
 	"github.com/tendermint/tendermint/types"
-	tmtime "github.com/tendermint/tendermint/types/time"
 	"github.com/tendermint/tendermint/version"
 )
 
@@ -72,7 +77,9 @@ func (pkz privKeys) ToValidators(init, inc int64) *types.ValidatorSet {
 }
 
 // signHeader properly signs the header with all keys from first to last exclusive.
-func (pkz privKeys) signHeader(header *types.Header, valSet *types.ValidatorSet, first, last int) *types.Commit {
+func (pkz privKeys) signHeader(t testing.TB, header *types.Header, valSet *types.ValidatorSet, first, last int) *types.Commit {
+	t.Helper()
+
 	commitSigs := make([]types.CommitSig, len(pkz))
 	for i := 0; i < len(pkz); i++ {
 		commitSigs[i] = types.NewCommitSigAbsent()
@@ -85,15 +92,15 @@ func (pkz privKeys) signHeader(header *types.Header, valSet *types.ValidatorSet,
 
 	// Fill in the votes we want.
 	for i := first; i < last && i < len(pkz); i++ {
-		vote := makeVote(header, valSet, pkz[i], blockID)
+		vote := makeVote(t, header, valSet, pkz[i], blockID)
 		commitSigs[vote.ValidatorIndex] = vote.CommitSig()
 	}
 
 	return types.NewCommit(header.Height, 1, blockID, commitSigs)
 }
 
-func makeVote(header *types.Header, valset *types.ValidatorSet,
-	key crypto.PrivKey, blockID types.BlockID) *types.Vote {
+func makeVote(t testing.TB, header *types.Header, valset *types.ValidatorSet, key crypto.PrivKey, blockID types.BlockID) *types.Vote {
+	t.Helper()
 
 	addr := key.PubKey().Address()
 	idx, _ := valset.GetByAddress(addr)
@@ -111,9 +118,7 @@ func makeVote(header *types.Header, valset *types.ValidatorSet,
 	// Sign it
 	signBytes := types.VoteSignBytes(header.ChainID, v)
 	sig, err := key.Sign(signBytes)
-	if err != nil {
-		panic(err)
-	}
+	require.NoError(t, err)
 
 	vote.Signature = sig
 
@@ -141,26 +146,30 @@ func genHeader(chainID string, height int64, bTime time.Time, txs types.Txs,
 }
 
 // GenSignedHeader calls genHeader and signHeader and combines them into a SignedHeader.
-func (pkz privKeys) GenSignedHeader(chainID string, height int64, bTime time.Time, txs types.Txs,
+func (pkz privKeys) GenSignedHeader(t testing.TB, chainID string, height int64, bTime time.Time, txs types.Txs,
 	valset, nextValset *types.ValidatorSet, appHash, consHash, resHash []byte, first, last int) *types.SignedHeader {
+
+	t.Helper()
 
 	header := genHeader(chainID, height, bTime, txs, valset, nextValset, appHash, consHash, resHash)
 	return &types.SignedHeader{
 		Header: header,
-		Commit: pkz.signHeader(header, valset, first, last),
+		Commit: pkz.signHeader(t, header, valset, first, last),
 	}
 }
 
 // GenSignedHeaderLastBlockID calls genHeader and signHeader and combines them into a SignedHeader.
-func (pkz privKeys) GenSignedHeaderLastBlockID(chainID string, height int64, bTime time.Time, txs types.Txs,
+func (pkz privKeys) GenSignedHeaderLastBlockID(t testing.TB, chainID string, height int64, bTime time.Time, txs types.Txs,
 	valset, nextValset *types.ValidatorSet, appHash, consHash, resHash []byte, first, last int,
 	lastBlockID types.BlockID) *types.SignedHeader {
+
+	t.Helper()
 
 	header := genHeader(chainID, height, bTime, txs, valset, nextValset, appHash, consHash, resHash)
 	header.LastBlockID = lastBlockID
 	return &types.SignedHeader{
 		Header: header,
-		Commit: pkz.signHeader(header, valset, first, last),
+		Commit: pkz.signHeader(t, header, valset, first, last),
 	}
 }
 
@@ -169,23 +178,23 @@ func (pkz privKeys) ChangeKeys(delta int) privKeys {
 	return newKeys.Extend(delta)
 }
 
-// Generates the header and validator set to create a full entire mock node with blocks to height (
-// blockSize) and with variation in validator sets. BlockIntervals are in per minute.
+// genLightBlocksWithKeys generates the header and validator set to create
+// blocks to height. BlockIntervals are in per minute.
 // NOTE: Expected to have a large validator set size ~ 100 validators.
-func genMockNodeWithKeys(
+func genLightBlocksWithKeys(
+	t testing.TB,
 	chainID string,
-	blockSize int64,
+	numBlocks int64,
 	valSize int,
 	valVariation float32,
-	bTime time.Time) (
-	map[int64]*types.SignedHeader,
-	map[int64]*types.ValidatorSet,
-	map[int64]privKeys) {
+	bTime time.Time,
+) (map[int64]*types.SignedHeader, map[int64]*types.ValidatorSet, map[int64]privKeys) {
+	t.Helper()
 
 	var (
-		headers         = make(map[int64]*types.SignedHeader, blockSize)
-		valset          = make(map[int64]*types.ValidatorSet, blockSize+1)
-		keymap          = make(map[int64]privKeys, blockSize+1)
+		headers         = make(map[int64]*types.SignedHeader, numBlocks)
+		valset          = make(map[int64]*types.ValidatorSet, numBlocks+1)
+		keymap          = make(map[int64]privKeys, numBlocks+1)
 		keys            = genPrivKeys(valSize)
 		totalVariation  = valVariation
 		valVariationInt int
@@ -199,7 +208,7 @@ func genMockNodeWithKeys(
 	keymap[2] = newKeys
 
 	// genesis header and vals
-	lastHeader := keys.GenSignedHeader(chainID, 1, bTime.Add(1*time.Minute), nil,
+	lastHeader := keys.GenSignedHeader(t, chainID, 1, bTime.Add(1*time.Minute), nil,
 		keys.ToValidators(2, 0), newKeys.ToValidators(2, 0), hash("app_hash"), hash("cons_hash"),
 		hash("results_hash"), 0, len(keys))
 	currentHeader := lastHeader
@@ -207,12 +216,12 @@ func genMockNodeWithKeys(
 	valset[1] = keys.ToValidators(2, 0)
 	keys = newKeys
 
-	for height := int64(2); height <= blockSize; height++ {
+	for height := int64(2); height <= numBlocks; height++ {
 		totalVariation += valVariation
 		valVariationInt = int(totalVariation)
 		totalVariation = -float32(valVariationInt)
 		newKeys = keys.ChangeKeys(valVariationInt)
-		currentHeader = keys.GenSignedHeaderLastBlockID(chainID, height, bTime.Add(time.Duration(height)*time.Minute),
+		currentHeader = keys.GenSignedHeaderLastBlockID(t, chainID, height, bTime.Add(time.Duration(height)*time.Minute),
 			nil,
 			keys.ToValidators(2, 0), newKeys.ToValidators(2, 0), hash("app_hash"), hash("cons_hash"),
 			hash("results_hash"), 0, len(keys), types.BlockID{Hash: lastHeader.Hash()})
@@ -226,17 +235,14 @@ func genMockNodeWithKeys(
 	return headers, valset, keymap
 }
 
-func genMockNode(
-	chainID string,
-	blockSize int64,
-	valSize int,
-	valVariation float32,
-	bTime time.Time) (
-	string,
-	map[int64]*types.SignedHeader,
-	map[int64]*types.ValidatorSet) {
-	headers, valset, _ := genMockNodeWithKeys(chainID, blockSize, valSize, valVariation, bTime)
-	return chainID, headers, valset
+func mockNodeFromHeadersAndVals(headers map[int64]*types.SignedHeader,
+	vals map[int64]*types.ValidatorSet) *provider_mocks.Provider {
+	mockNode := &provider_mocks.Provider{}
+	for i, header := range headers {
+		lb := &types.LightBlock{SignedHeader: header, ValidatorSet: vals[i]}
+		mockNode.On("LightBlock", mock.Anything, i).Return(lb, nil)
+	}
+	return mockNode
 }
 
 func hash(s string) []byte {

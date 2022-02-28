@@ -5,12 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"math/rand"
 	"regexp"
 	"strings"
 	"sync"
 
 	tmmath "github.com/tendermint/tendermint/libs/math"
-	tmrand "github.com/tendermint/tendermint/libs/rand"
 	tmprotobits "github.com/tendermint/tendermint/proto/tendermint/libs/bits"
 )
 
@@ -27,9 +27,21 @@ func NewBitArray(bits int) *BitArray {
 	if bits <= 0 {
 		return nil
 	}
-	return &BitArray{
-		Bits:  bits,
-		Elems: make([]uint64, numElems(bits)),
+	bA := &BitArray{}
+	bA.reset(bits)
+	return bA
+}
+
+// reset changes size of BitArray to `bits` and re-allocates (zeroed) data buffer
+func (bA *BitArray) reset(bits int) {
+	bA.mtx.Lock()
+	defer bA.mtx.Unlock()
+
+	bA.Bits = bits
+	if bits == 0 {
+		bA.Elems = nil
+	} else {
+		bA.Elems = make([]uint64, numElems(bits))
 	}
 }
 
@@ -60,7 +72,7 @@ func (bA *BitArray) getIndex(i int) bool {
 }
 
 // SetIndex sets the bit at index i within the bit array.
-// The behavior is undefined if i >= bA.Bits
+// This method returns false if i is out of range of the BitArray.
 func (bA *BitArray) SetIndex(i int, v bool) bool {
 	if bA == nil {
 		return false
@@ -71,7 +83,7 @@ func (bA *BitArray) SetIndex(i int, v bool) bool {
 }
 
 func (bA *BitArray) setIndex(i int, v bool) bool {
-	if i >= bA.Bits {
+	if i < 0 || i >= bA.Bits {
 		return false
 	}
 	if v {
@@ -242,7 +254,7 @@ func (bA *BitArray) IsFull() bool {
 
 // PickRandom returns a random index for a set bit in the bit array.
 // If there is no such value, it returns 0, false.
-// It uses the global randomness in `random.go` to get this index.
+// It uses math/rand's global randomness Source to get this index.
 func (bA *BitArray) PickRandom() (int, bool) {
 	if bA == nil {
 		return 0, false
@@ -256,7 +268,13 @@ func (bA *BitArray) PickRandom() (int, bool) {
 		return 0, false
 	}
 
-	return trueIndices[tmrand.Intn(len(trueIndices))], true
+	// NOTE: using the default math/rand might result in somewhat
+	// amount of determinism here. It would be possible to use
+	// rand.New(rand.NewSeed(time.Now().Unix())).Intn() to
+	// counteract this possibility if it proved to be material.
+	//
+	// nolint:gosec // G404: Use of weak random number generator
+	return trueIndices[rand.Intn(len(trueIndices))], true
 }
 
 func (bA *BitArray) getTrueIndices() []int {
@@ -396,8 +414,7 @@ func (bA *BitArray) UnmarshalJSON(bz []byte) error {
 	if b == "null" {
 		// This is required e.g. for encoding/json when decoding
 		// into a pointer with pre-allocated BitArray.
-		bA.Bits = 0
-		bA.Elems = nil
+		bA.reset(0)
 		return nil
 	}
 
@@ -407,16 +424,15 @@ func (bA *BitArray) UnmarshalJSON(bz []byte) error {
 		return fmt.Errorf("bitArray in JSON should be a string of format %q but got %s", bitArrayJSONRegexp.String(), b)
 	}
 	bits := match[1]
-
-	// Construct new BitArray and copy over.
 	numBits := len(bits)
-	bA2 := NewBitArray(numBits)
+
+	bA.reset(numBits)
 	for i := 0; i < numBits; i++ {
 		if bits[i] == 'x' {
-			bA2.SetIndex(i, true)
+			bA.SetIndex(i, true)
 		}
 	}
-	*bA = *bA2 //nolint:govet
+
 	return nil
 }
 

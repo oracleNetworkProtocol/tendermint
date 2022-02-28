@@ -23,10 +23,6 @@ module.exports = {
     },
     versions: [
       {
-        "label": "v0.32",
-        "key": "v0.32"
-      },
-      {
         "label": "v0.33",
         "key": "v0.33"
       },
@@ -35,8 +31,8 @@ module.exports = {
         "key": "v0.34"
       },
       {
-        "label": "master",
-        "key": "master"
+        "label": "v0.35",
+        "key": "v0.35"
       }
     ],
     topbar: {
@@ -49,12 +45,10 @@ module.exports = {
           title: 'Resources',
           children: [
             {
-              title: 'Developer Sessions',
-              path: '/DEV_SESSIONS.html'
-            },
-            {
+              // TODO(creachadair): Figure out how to make this per-branch.
+              // See: https://github.com/tendermint/tendermint/issues/7908
               title: 'RPC',
-              path: 'https://docs.tendermint.com/master/rpc/',
+              path: 'https://docs.tendermint.com/v0.35/rpc/',
               static: true
             },
           ]
@@ -78,7 +72,7 @@ module.exports = {
     },
     footer: {
       question: {
-        text: 'Chat with Tendermint developers in <a href=\'https://discord.gg/vcExX9T\' target=\'_blank\'>Discord</a> or reach out on the <a href=\'https://forum.cosmos.network/c/tendermint\' target=\'_blank\'>Tendermint Forum</a> to learn more.'
+        text: 'Chat with Tendermint developers in <a href=\'https://discord.gg/cosmosnetwork\' target=\'_blank\'>Discord</a> or reach out on the <a href=\'https://forum.cosmos.network/c/tendermint\' target=\'_blank\'>Tendermint Forum</a> to learn more.'
       },
       logo: '/logo-bw.svg',
       textLink: {
@@ -165,6 +159,12 @@ module.exports = {
       '@vuepress/google-analytics',
       {
         ga: 'UA-51029217-11'
+      }
+    ],
+    [
+      '@vuepress/plugin-html-redirect',
+      {
+        countdown: 0
       }
     ]
   ]

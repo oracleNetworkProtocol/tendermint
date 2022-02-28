@@ -48,8 +48,12 @@ const (
 	PerturbationPause      Perturbation = "pause"
 	PerturbationRestart    Perturbation = "restart"
 
-	EvidenceAgeHeight int64         = 3
-	EvidenceAgeTime   time.Duration = 10 * time.Second
+	EvidenceAgeHeight int64         = 7
+	EvidenceAgeTime   time.Duration = 500 * time.Millisecond
+
+	StateSyncP2P      = "p2p"
+	StateSyncRPC      = "rpc"
+	StateSyncDisabled = ""
 )
 
 // Testnet represents a single testnet.
@@ -66,6 +70,8 @@ type Testnet struct {
 	KeyType          string
 	Evidence         int
 	LogLevel         string
+	TxSize           int
+	ABCIProtocol     string
 }
 
 // Node represents a Tendermint node in a testnet.
@@ -78,8 +84,8 @@ type Node struct {
 	IP               net.IP
 	ProxyPort        uint32
 	StartAt          int64
-	FastSync         string
-	StateSync        bool
+	Mempool          string
+	StateSync        string
 	Database         string
 	ABCIProtocol     Protocol
 	PrivvalProtocol  Protocol
@@ -90,8 +96,8 @@ type Node struct {
 	PersistentPeers  []*Node
 	Perturbations    []Perturbation
 	LogLevel         string
-	UseNewP2P        bool
 	QueueType        string
+	HasStarted       bool
 }
 
 // LoadTestnet loads a testnet from a manifest file, using the filename to
@@ -133,12 +139,20 @@ func LoadTestnet(file string) (*Testnet, error) {
 		Evidence:         manifest.Evidence,
 		KeyType:          "ed25519",
 		LogLevel:         manifest.LogLevel,
+		TxSize:           manifest.TxSize,
+		ABCIProtocol:     manifest.ABCIProtocol,
 	}
 	if len(manifest.KeyType) != 0 {
 		testnet.KeyType = manifest.KeyType
 	}
+	if testnet.TxSize <= 0 {
+		testnet.TxSize = 1024
+	}
 	if manifest.InitialHeight > 0 {
 		testnet.InitialHeight = manifest.InitialHeight
+	}
+	if testnet.ABCIProtocol == "" {
+		testnet.ABCIProtocol = string(ProtocolBuiltin)
 	}
 
 	// Set up nodes, in alphabetical order (IPs and ports get same order).
@@ -159,17 +173,16 @@ func LoadTestnet(file string) (*Testnet, error) {
 			ProxyPort:        proxyPortGen.Next(),
 			Mode:             ModeValidator,
 			Database:         "goleveldb",
-			ABCIProtocol:     ProtocolBuiltin,
+			ABCIProtocol:     Protocol(testnet.ABCIProtocol),
 			PrivvalProtocol:  ProtocolFile,
 			StartAt:          nodeManifest.StartAt,
-			FastSync:         nodeManifest.FastSync,
+			Mempool:          nodeManifest.Mempool,
 			StateSync:        nodeManifest.StateSync,
 			PersistInterval:  1,
 			SnapshotInterval: nodeManifest.SnapshotInterval,
 			RetainBlocks:     nodeManifest.RetainBlocks,
 			Perturbations:    []Perturbation{},
 			LogLevel:         manifest.LogLevel,
-			UseNewP2P:        manifest.UseNewP2P,
 			QueueType:        manifest.QueueType,
 		}
 		if node.StartAt == testnet.InitialHeight {
@@ -178,11 +191,11 @@ func LoadTestnet(file string) (*Testnet, error) {
 		if nodeManifest.Mode != "" {
 			node.Mode = Mode(nodeManifest.Mode)
 		}
+		if node.Mode == ModeLight {
+			node.ABCIProtocol = ProtocolBuiltin
+		}
 		if nodeManifest.Database != "" {
 			node.Database = nodeManifest.Database
-		}
-		if nodeManifest.ABCIProtocol != "" {
-			node.ABCIProtocol = Protocol(nodeManifest.ABCIProtocol)
 		}
 		if nodeManifest.PrivvalProtocol != "" {
 			node.PrivvalProtocol = Protocol(nodeManifest.PrivvalProtocol)
@@ -217,14 +230,20 @@ func LoadTestnet(file string) (*Testnet, error) {
 			if peer == nil {
 				return nil, fmt.Errorf("unknown persistent peer %q for node %q", peerName, node.Name)
 			}
+			if peer.Mode == ModeLight {
+				return nil, fmt.Errorf("can not have a light client as a persistent peer (for %q)", node.Name)
+			}
 			node.PersistentPeers = append(node.PersistentPeers, peer)
 		}
 
 		// If there are no seeds or persistent peers specified, default to persistent
-		// connections to all other nodes.
+		// connections to all other full nodes.
 		if len(node.PersistentPeers) == 0 && len(node.Seeds) == 0 {
 			for _, peer := range testnet.Nodes {
 				if peer.Name == node.Name {
+					continue
+				}
+				if peer.Mode == ModeLight {
 					continue
 				}
 				node.PersistentPeers = append(node.PersistentPeers, peer)
@@ -314,10 +333,20 @@ func (n Node) Validate(testnet Testnet) error {
 			}
 		}
 	}
-	switch n.FastSync {
-	case "", "v0", "v2":
+	switch n.StateSync {
+	case StateSyncDisabled, StateSyncP2P, StateSyncRPC:
 	default:
-		return fmt.Errorf("invalid fast sync setting %q", n.FastSync)
+		return fmt.Errorf("invalid state sync setting %q", n.StateSync)
+	}
+	switch n.Mempool {
+	case "", "v0", "v1":
+	default:
+		return fmt.Errorf("invalid mempool version %q", n.Mempool)
+	}
+	switch n.QueueType {
+	case "", "priority", "fifo":
+	default:
+		return fmt.Errorf("unsupported p2p queue type: %s", n.QueueType)
 	}
 	switch n.Database {
 	case "goleveldb", "cleveldb", "boltdb", "rocksdb", "badgerdb":
@@ -342,7 +371,7 @@ func (n Node) Validate(testnet Testnet) error {
 		return fmt.Errorf("cannot start at height %v lower than initial height %v",
 			n.StartAt, n.Testnet.InitialHeight)
 	}
-	if n.StateSync && n.StartAt == 0 {
+	if n.StateSync != StateSyncDisabled && n.StartAt == 0 {
 		return errors.New("state synced nodes cannot start at the initial height")
 	}
 	if n.RetainBlocks != 0 && n.RetainBlocks < uint64(EvidenceAgeHeight) {
@@ -391,16 +420,6 @@ func (t Testnet) ArchiveNodes() []*Node {
 		}
 	}
 	return nodes
-}
-
-// RandomNode returns a random non-seed node.
-func (t Testnet) RandomNode() *Node {
-	for {
-		node := t.Nodes[rand.Intn(len(t.Nodes))]
-		if node.Mode != ModeSeed {
-			return node
-		}
-	}
 }
 
 // IPv6 returns true if the testnet is an IPv6 network.

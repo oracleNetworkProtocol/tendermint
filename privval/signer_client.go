@@ -6,7 +6,8 @@ import (
 	"time"
 
 	"github.com/tendermint/tendermint/crypto"
-	cryptoenc "github.com/tendermint/tendermint/crypto/encoding"
+	"github.com/tendermint/tendermint/crypto/encoding"
+	"github.com/tendermint/tendermint/libs/log"
 	privvalproto "github.com/tendermint/tendermint/proto/tendermint/privval"
 	tmproto "github.com/tendermint/tendermint/proto/tendermint/types"
 	"github.com/tendermint/tendermint/types"
@@ -15,6 +16,7 @@ import (
 // SignerClient implements PrivValidator.
 // Handles remote validator connections that provide signing services
 type SignerClient struct {
+	logger   log.Logger
 	endpoint *SignerListenerEndpoint
 	chainID  string
 }
@@ -23,19 +25,28 @@ var _ types.PrivValidator = (*SignerClient)(nil)
 
 // NewSignerClient returns an instance of SignerClient.
 // it will start the endpoint (if not already started)
-func NewSignerClient(endpoint *SignerListenerEndpoint, chainID string) (*SignerClient, error) {
+func NewSignerClient(ctx context.Context, endpoint *SignerListenerEndpoint, chainID string) (*SignerClient, error) {
 	if !endpoint.IsRunning() {
-		if err := endpoint.Start(); err != nil {
+		if err := endpoint.Start(ctx); err != nil {
 			return nil, fmt.Errorf("failed to start listener endpoint: %w", err)
 		}
 	}
 
-	return &SignerClient{endpoint: endpoint, chainID: chainID}, nil
+	return &SignerClient{
+		logger:   endpoint.logger,
+		endpoint: endpoint,
+		chainID:  chainID,
+	}, nil
 }
 
 // Close closes the underlying connection
 func (sc *SignerClient) Close() error {
-	return sc.endpoint.Close()
+	sc.endpoint.Stop()
+	err := sc.endpoint.Close()
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 // IsConnected indicates with the signer is connected to a remote signing service
@@ -44,18 +55,18 @@ func (sc *SignerClient) IsConnected() bool {
 }
 
 // WaitForConnection waits maxWait for a connection or returns a timeout error
-func (sc *SignerClient) WaitForConnection(maxWait time.Duration) error {
-	return sc.endpoint.WaitForConnection(maxWait)
+func (sc *SignerClient) WaitForConnection(ctx context.Context, maxWait time.Duration) error {
+	return sc.endpoint.WaitForConnection(ctx, maxWait)
 }
 
 //--------------------------------------------------------
 // Implement PrivValidator
 
 // Ping sends a ping request to the remote signer
-func (sc *SignerClient) Ping() error {
-	response, err := sc.endpoint.SendRequest(mustWrapMsg(&privvalproto.PingRequest{}))
+func (sc *SignerClient) Ping(ctx context.Context) error {
+	response, err := sc.endpoint.SendRequest(ctx, mustWrapMsg(&privvalproto.PingRequest{}))
 	if err != nil {
-		sc.endpoint.Logger.Error("SignerClient::Ping", "err", err)
+		sc.logger.Error("SignerClient::Ping", "err", err)
 		return nil
 	}
 
@@ -70,7 +81,7 @@ func (sc *SignerClient) Ping() error {
 // GetPubKey retrieves a public key from a remote signer
 // returns an error if client is not able to provide the key
 func (sc *SignerClient) GetPubKey(ctx context.Context) (crypto.PubKey, error) {
-	response, err := sc.endpoint.SendRequest(mustWrapMsg(&privvalproto.PubKeyRequest{ChainId: sc.chainID}))
+	response, err := sc.endpoint.SendRequest(ctx, mustWrapMsg(&privvalproto.PubKeyRequest{ChainId: sc.chainID}))
 	if err != nil {
 		return nil, fmt.Errorf("send: %w", err)
 	}
@@ -83,7 +94,7 @@ func (sc *SignerClient) GetPubKey(ctx context.Context) (crypto.PubKey, error) {
 		return nil, &RemoteSignerError{Code: int(resp.Error.Code), Description: resp.Error.Description}
 	}
 
-	pk, err := cryptoenc.PubKeyFromProto(resp.PubKey)
+	pk, err := encoding.PubKeyFromProto(resp.PubKey)
 	if err != nil {
 		return nil, err
 	}
@@ -93,7 +104,7 @@ func (sc *SignerClient) GetPubKey(ctx context.Context) (crypto.PubKey, error) {
 
 // SignVote requests a remote signer to sign a vote
 func (sc *SignerClient) SignVote(ctx context.Context, chainID string, vote *tmproto.Vote) error {
-	response, err := sc.endpoint.SendRequest(mustWrapMsg(&privvalproto.SignVoteRequest{Vote: vote, ChainId: chainID}))
+	response, err := sc.endpoint.SendRequest(ctx, mustWrapMsg(&privvalproto.SignVoteRequest{Vote: vote, ChainId: chainID}))
 	if err != nil {
 		return err
 	}
@@ -113,7 +124,7 @@ func (sc *SignerClient) SignVote(ctx context.Context, chainID string, vote *tmpr
 
 // SignProposal requests a remote signer to sign a proposal
 func (sc *SignerClient) SignProposal(ctx context.Context, chainID string, proposal *tmproto.Proposal) error {
-	response, err := sc.endpoint.SendRequest(mustWrapMsg(
+	response, err := sc.endpoint.SendRequest(ctx, mustWrapMsg(
 		&privvalproto.SignProposalRequest{Proposal: proposal, ChainId: chainID},
 	))
 	if err != nil {

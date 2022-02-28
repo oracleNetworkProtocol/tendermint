@@ -38,9 +38,12 @@ func VerifyNonAdjacent(
 	trustingPeriod time.Duration,
 	now time.Time,
 	maxClockDrift time.Duration,
-	trustLevel tmmath.Fraction) error {
+	trustLevel tmmath.Fraction,
+) error {
 
-	checkRequiredHeaderFields(trustedHeader)
+	if err := checkRequiredHeaderFields(trustedHeader); err != nil {
+		return err
+	}
 
 	if untrustedHeader.Height == trustedHeader.Height+1 {
 		return errors.New("headers must be non adjacent in height")
@@ -50,8 +53,9 @@ func VerifyNonAdjacent(
 		return err
 	}
 
-	if HeaderExpired(trustedHeader, trustingPeriod, now) {
-		return ErrOldHeaderExpired{trustedHeader.Time.Add(trustingPeriod), now}
+	// check if the untrusted header is within the trust period
+	if HeaderExpired(untrustedHeader, trustingPeriod, now) {
+		return ErrOldHeaderExpired{untrustedHeader.Time.Add(trustingPeriod), now}
 	}
 
 	if err := verifyNewHeaderAndVals(
@@ -105,20 +109,24 @@ func VerifyAdjacent(
 	untrustedVals *types.ValidatorSet, // height=X+1
 	trustingPeriod time.Duration,
 	now time.Time,
-	maxClockDrift time.Duration) error {
+	maxClockDrift time.Duration,
+) error {
 
-	checkRequiredHeaderFields(trustedHeader)
+	if err := checkRequiredHeaderFields(trustedHeader); err != nil {
+		return err
+	}
 
 	if len(trustedHeader.NextValidatorsHash) == 0 {
-		panic("next validators hash in trusted header is empty")
+		return errors.New("next validators hash in trusted header is empty")
 	}
 
 	if untrustedHeader.Height != trustedHeader.Height+1 {
 		return errors.New("headers must be adjacent in height")
 	}
 
-	if HeaderExpired(trustedHeader, trustingPeriod, now) {
-		return ErrOldHeaderExpired{trustedHeader.Time.Add(trustingPeriod), now}
+	// check if the untrusted header is within the trust period
+	if HeaderExpired(untrustedHeader, trustingPeriod, now) {
+		return ErrOldHeaderExpired{untrustedHeader.Time.Add(trustingPeriod), now}
 	}
 
 	if err := verifyNewHeaderAndVals(
@@ -167,10 +175,10 @@ func Verify(
 
 // ValidateTrustLevel checks that trustLevel is within the allowed range [1/3,
 // 1]. If not, it returns an error. 1/3 is the minimum amount of trust needed
-// which does not break the security model.
+// which does not break the security model. Must be strictly less than 1.
 func ValidateTrustLevel(lvl tmmath.Fraction) error {
 	if lvl.Numerator*3 < lvl.Denominator || // < 1/3
-		lvl.Numerator > lvl.Denominator || // > 1
+		lvl.Numerator >= lvl.Denominator || // >= 1
 		lvl.Denominator == 0 {
 		return fmt.Errorf("trustLevel must be within [1/3, 1], given %v", lvl)
 	}
@@ -192,7 +200,10 @@ func HeaderExpired(h *types.SignedHeader, trustingPeriod time.Duration, now time
 //  of the trusted header
 //
 // For any of these cases ErrInvalidHeader is returned.
-// NOTE: This does not check whether the trusted header has expired or not.
+// NOTE: This does not check whether the trusted or untrusted header has expired
+// or not. These checks are not necessary because the detector never runs during
+// backwards verification and thus evidence that needs to be within a certain
+// time bound is never sent.
 func VerifyBackwards(untrustedHeader, trustedHeader *types.Header) error {
 	if err := untrustedHeader.ValidateBasic(); err != nil {
 		return ErrInvalidHeader{err}
@@ -220,6 +231,8 @@ func VerifyBackwards(untrustedHeader, trustedHeader *types.Header) error {
 	return nil
 }
 
+// NOTE: This function assumes that untrustedHeader is after trustedHeader.
+// Do not use for backwards verification.
 func verifyNewHeaderAndVals(
 	untrustedHeader *types.SignedHeader,
 	untrustedVals *types.ValidatorSet,
@@ -261,17 +274,18 @@ func verifyNewHeaderAndVals(
 	return nil
 }
 
-func checkRequiredHeaderFields(h *types.SignedHeader) {
+func checkRequiredHeaderFields(h *types.SignedHeader) error {
 	if h.Height == 0 {
-		panic("height in trusted header must be set (non zero")
+		return errors.New("height in trusted header must be set (non zero")
 	}
 
 	zeroTime := time.Time{}
 	if h.Time == zeroTime {
-		panic("time in trusted header must be set")
+		return errors.New("time in trusted header must be set")
 	}
 
 	if h.ChainID == "" {
-		panic("chain ID in trusted header must be set")
+		return errors.New("chain ID in trusted header must be set")
 	}
+	return nil
 }

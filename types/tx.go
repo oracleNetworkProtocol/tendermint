@@ -2,6 +2,7 @@ package types
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 
@@ -16,15 +17,14 @@ import (
 // Might we want types here ?
 type Tx []byte
 
+// Key produces a fixed-length key for use in indexing.
+func (tx Tx) Key() TxKey { return sha256.Sum256(tx) }
+
 // Hash computes the TMHASH hash of the wire encoded transaction.
-func (tx Tx) Hash() []byte {
-	return tmhash.Sum(tx)
-}
+func (tx Tx) Hash() []byte { return tmhash.Sum(tx) }
 
 // String returns the hex-encoded transaction as a string.
-func (tx Tx) String() string {
-	return fmt.Sprintf("Tx{%X}", []byte(tx))
-}
+func (tx Tx) String() string { return fmt.Sprintf("Tx{%X}", []byte(tx)) }
 
 // Txs is a slice of Tx.
 type Txs []Tx
@@ -77,6 +77,29 @@ func (txs Txs) Proof(i int) TxProof {
 		Data:     txs[i],
 		Proof:    *proofs[i],
 	}
+}
+
+// ToSliceOfBytes converts a Txs to slice of byte slices.
+//
+// NOTE: This method should become obsolete once Txs is switched to [][]byte.
+// ref: #2603
+// TODO This function is to disappear when TxRecord is introduced
+func (txs Txs) ToSliceOfBytes() [][]byte {
+	txBzs := make([][]byte, len(txs))
+	for i := 0; i < len(txs); i++ {
+		txBzs[i] = txs[i]
+	}
+	return txBzs
+}
+
+// ToTxs converts a raw slice of byte slices into a Txs type.
+// TODO This function is to disappear when TxRecord is introduced
+func ToTxs(txs [][]byte) Txs {
+	txBzs := make(Txs, len(txs))
+	for i := 0; i < len(txs); i++ {
+		txBzs[i] = txs[i]
+	}
+	return txBzs
 }
 
 // TxProof represents a Merkle proof of the presence of a transaction in the Merkle tree.

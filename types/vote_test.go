@@ -12,23 +12,24 @@ import (
 	"github.com/tendermint/tendermint/crypto"
 	"github.com/tendermint/tendermint/crypto/ed25519"
 	"github.com/tendermint/tendermint/crypto/tmhash"
-	"github.com/tendermint/tendermint/libs/protoio"
+	"github.com/tendermint/tendermint/internal/libs/protoio"
 	tmproto "github.com/tendermint/tendermint/proto/tendermint/types"
 )
 
-func examplePrevote() *Vote {
-	return exampleVote(byte(tmproto.PrevoteType))
+func examplePrevote(t *testing.T) *Vote {
+	t.Helper()
+	return exampleVote(t, byte(tmproto.PrevoteType))
 }
 
-func examplePrecommit() *Vote {
-	return exampleVote(byte(tmproto.PrecommitType))
+func examplePrecommit(t testing.TB) *Vote {
+	t.Helper()
+	return exampleVote(t, byte(tmproto.PrecommitType))
 }
 
-func exampleVote(t byte) *Vote {
+func exampleVote(tb testing.TB, t byte) *Vote {
+	tb.Helper()
 	var stamp, err = time.Parse(TimeFormat, "2017-12-25T03:00:01.234Z")
-	if err != nil {
-		panic(err)
-	}
+	require.NoError(tb, err)
 
 	return &Vote{
 		Type:      tmproto.SignedMsgType(t),
@@ -46,9 +47,8 @@ func exampleVote(t byte) *Vote {
 		ValidatorIndex:   56789,
 	}
 }
-
 func TestVoteSignable(t *testing.T) {
-	vote := examplePrecommit()
+	vote := examplePrecommit(t)
 	v := vote.ToProto()
 	signBytes := VoteSignBytes("test_chain_id", v)
 	pb := CanonicalizeVote("test_chain_id", v)
@@ -128,6 +128,33 @@ func TestVoteSignBytesTestVectors(t *testing.T) {
 				0x32,
 				0xd, 0x74, 0x65, 0x73, 0x74, 0x5f, 0x63, 0x68, 0x61, 0x69, 0x6e, 0x5f, 0x69, 0x64}, // chainID
 		},
+		// containing vote extension
+		5: {
+			"test_chain_id", &Vote{Height: 1, Round: 1, VoteExtension: VoteExtension{
+				AppDataToSign:             []byte("signed"),
+				AppDataSelfAuthenticating: []byte("auth"),
+			}},
+			[]byte{
+				0x38,                                   // length
+				0x11,                                   // (field_number << 3) | wire_type
+				0x1, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, // height
+				0x19,                                   // (field_number << 3) | wire_type
+				0x1, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, // round
+				// remaning fields:
+				0x2a,                                                                // (field_number << 3) | wire_type
+				0xb, 0x8, 0x80, 0x92, 0xb8, 0xc3, 0x98, 0xfe, 0xff, 0xff, 0xff, 0x1, // timestamp
+				// (field_number << 3) | wire_type
+				0x32,
+				0xd, 0x74, 0x65, 0x73, 0x74, 0x5f, 0x63, 0x68, 0x61, 0x69, 0x6e, 0x5f, 0x69, 0x64, // chainID
+				// (field_number << 3) | wire_type
+				0x3a,
+				0x8,                                // length
+				0xa,                                // (field_number << 3) | wire_type
+				0x6,                                // length
+				0x73, 0x69, 0x67, 0x6e, 0x65, 0x64, // AppDataSigned
+				// SelfAuthenticating data is excluded on signing
+			}, // chainID
+		},
 	}
 	for i, tc := range tests {
 		v := tc.vote.ToProto()
@@ -148,16 +175,19 @@ func TestVoteProposalNotEq(t *testing.T) {
 }
 
 func TestVoteVerifySignature(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	privVal := NewMockPV()
-	pubkey, err := privVal.GetPubKey(context.Background())
+	pubkey, err := privVal.GetPubKey(ctx)
 	require.NoError(t, err)
 
-	vote := examplePrecommit()
+	vote := examplePrecommit(t)
 	v := vote.ToProto()
 	signBytes := VoteSignBytes("test_chain_id", v)
 
 	// sign it
-	err = privVal.SignVote(context.Background(), "test_chain_id", v)
+	err = privVal.SignVote(ctx, "test_chain_id", v)
 	require.NoError(t, err)
 
 	// verify the same vote
@@ -200,11 +230,14 @@ func TestIsVoteTypeValid(t *testing.T) {
 }
 
 func TestVoteVerify(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	privVal := NewMockPV()
-	pubkey, err := privVal.GetPubKey(context.Background())
+	pubkey, err := privVal.GetPubKey(ctx)
 	require.NoError(t, err)
 
-	vote := examplePrevote()
+	vote := examplePrevote(t)
 	vote.ValidatorAddress = pubkey.Address()
 
 	err = vote.Verify("test_chain_id", ed25519.GenPrivKey().PubKey())
@@ -219,14 +252,14 @@ func TestVoteVerify(t *testing.T) {
 }
 
 func TestVoteString(t *testing.T) {
-	str := examplePrecommit().String()
-	expected := `Vote{56789:6AF1F4111082 12345/02/SIGNED_MSG_TYPE_PRECOMMIT(Precommit) 8B01023386C3 000000000000 @ 2017-12-25T03:00:01.234Z}` //nolint:lll //ignore line length for tests
+	str := examplePrecommit(t).String()
+	expected := `Vote{56789:6AF1F4111082 12345/02/SIGNED_MSG_TYPE_PRECOMMIT(Precommit) 8B01023386C3 000000000000 000000000000 @ 2017-12-25T03:00:01.234Z}` //nolint:lll //ignore line length for tests
 	if str != expected {
 		t.Errorf("got unexpected string for Vote. Expected:\n%v\nGot:\n%v", expected, str)
 	}
 
-	str2 := examplePrevote().String()
-	expected = `Vote{56789:6AF1F4111082 12345/02/SIGNED_MSG_TYPE_PREVOTE(Prevote) 8B01023386C3 000000000000 @ 2017-12-25T03:00:01.234Z}` //nolint:lll //ignore line length for tests
+	str2 := examplePrevote(t).String()
+	expected = `Vote{56789:6AF1F4111082 12345/02/SIGNED_MSG_TYPE_PREVOTE(Prevote) 8B01023386C3 000000000000 000000000000 @ 2017-12-25T03:00:01.234Z}` //nolint:lll //ignore line length for tests
 	if str2 != expected {
 		t.Errorf("got unexpected string for Vote. Expected:\n%v\nGot:\n%v", expected, str2)
 	}
@@ -254,9 +287,12 @@ func TestVoteValidateBasic(t *testing.T) {
 	for _, tc := range testCases {
 		tc := tc
 		t.Run(tc.testName, func(t *testing.T) {
-			vote := examplePrecommit()
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			vote := examplePrecommit(t)
 			v := vote.ToProto()
-			err := privVal.SignVote(context.Background(), "test_chain_id", v)
+			err := privVal.SignVote(ctx, "test_chain_id", v)
 			vote.Signature = v.Signature
 			require.NoError(t, err)
 			tc.malleateVote(vote)
@@ -266,10 +302,13 @@ func TestVoteValidateBasic(t *testing.T) {
 }
 
 func TestVoteProtobuf(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	privVal := NewMockPV()
-	vote := examplePrecommit()
+	vote := examplePrecommit(t)
 	v := vote.ToProto()
-	err := privVal.SignVote(context.Background(), "test_chain_id", v)
+	err := privVal.SignVote(ctx, "test_chain_id", v)
 	vote.Signature = v.Signature
 	require.NoError(t, err)
 
@@ -293,4 +332,59 @@ func TestVoteProtobuf(t *testing.T) {
 			require.Error(t, err)
 		}
 	}
+}
+
+var sink interface{}
+
+func getSampleCommit(ctx context.Context, t testing.TB) *Commit {
+	t.Helper()
+
+	lastID := makeBlockIDRandom()
+	voteSet, _, vals := randVoteSet(ctx, t, 2, 1, tmproto.PrecommitType, 10, 1)
+	commit, err := makeCommit(ctx, lastID, 2, 1, voteSet, vals, time.Now())
+
+	require.NoError(t, err)
+
+	return commit
+}
+
+func BenchmarkVoteSignBytes(b *testing.B) {
+	protoVote := examplePrecommit(b).ToProto()
+
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		sink = VoteSignBytes("test_chain_id", protoVote)
+	}
+
+	if sink == nil {
+		b.Fatal("Benchmark did not run")
+	}
+
+	// Reset the sink.
+	sink = (interface{})(nil)
+}
+
+func BenchmarkCommitVoteSignBytes(b *testing.B) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	sampleCommit := getSampleCommit(ctx, b)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		for index := range sampleCommit.Signatures {
+			sink = sampleCommit.VoteSignBytes("test_chain_id", int32(index))
+		}
+	}
+
+	if sink == nil {
+		b.Fatal("Benchmark did not run")
+	}
+
+	// Reset the sink.
+	sink = (interface{})(nil)
 }

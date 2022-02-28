@@ -14,12 +14,12 @@ func TestMarshal(t *testing.T) {
 	bz := []byte("hello world")
 	dataB := HexBytes(bz)
 	bz2, err := dataB.Marshal()
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	assert.Equal(t, bz, bz2)
 
 	var dataB2 HexBytes
 	err = (&dataB2).Unmarshal(bz)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	assert.Equal(t, dataB, dataB2)
 }
 
@@ -37,6 +37,7 @@ func TestJSONMarshal(t *testing.T) {
 		{[]byte(``), `{"B1":"","B2":""}`},
 		{[]byte(`a`), `{"B1":"YQ==","B2":"61"}`},
 		{[]byte(`abc`), `{"B1":"YWJj","B2":"616263"}`},
+		{[]byte("\x1a\x2b\x3c"), `{"B1":"Gis8","B2":"1A2B3C"}`},
 	}
 
 	for i, tc := range cases {

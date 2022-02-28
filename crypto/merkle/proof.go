@@ -24,10 +24,10 @@ const (
 // everything.  This also affects the generalized proof system as
 // well.
 type Proof struct {
-	Total    int64    `json:"total"`     // Total number of items.
-	Index    int64    `json:"index"`     // Index of item to prove.
-	LeafHash []byte   `json:"leaf_hash"` // Hash of item value.
-	Aunts    [][]byte `json:"aunts"`     // Hashes from leaf's sibling to a root's child.
+	Total    int64    `json:"total,string"` // Total number of items.
+	Index    int64    `json:"index,string"` // Index of item to prove.
+	LeafHash []byte   `json:"leaf_hash"`    // Hash of item value.
+	Aunts    [][]byte `json:"aunts"`        // Hashes from leaf's sibling to a root's child.
 }
 
 // ProofsFromByteSlices computes inclusion proof for given items.
@@ -50,13 +50,13 @@ func ProofsFromByteSlices(items [][]byte) (rootHash []byte, proofs []*Proof) {
 // Verify that the Proof proves the root hash.
 // Check sp.Index/sp.Total manually if needed
 func (sp *Proof) Verify(rootHash []byte, leaf []byte) error {
-	leafHash := leafHash(leaf)
 	if sp.Total < 0 {
 		return errors.New("proof total must be positive")
 	}
 	if sp.Index < 0 {
 		return errors.New("proof index cannot be negative")
 	}
+	leafHash := leafHash(leaf)
 	if !bytes.Equal(sp.LeafHash, leafHash) {
 		return fmt.Errorf("invalid leaf hash: wanted %X got %X", leafHash, sp.LeafHash)
 	}
@@ -204,7 +204,10 @@ func (spn *ProofNode) FlattenAunts() [][]byte {
 		case spn.Right != nil:
 			innerHashes = append(innerHashes, spn.Right.Hash)
 		default:
-			break
+			// FIXME(fromberger): Per the documentation above, exactly one of
+			// these fields should be set. If that is true, this should probably
+			// be a panic since it violates the invariant. If not, when can it
+			// be OK to have no siblings? Does this occur at the leaves?
 		}
 		spn = spn.Parent
 	}

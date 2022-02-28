@@ -1,7 +1,7 @@
 package client
 
 import (
-	"io/ioutil"
+	"io"
 	"log"
 	"net/http"
 	"net/http/httptest"
@@ -21,13 +21,13 @@ func TestHTTPClientMakeHTTPDialer(t *testing.T) {
 	defer tsTLS.Close()
 	// This silences a TLS handshake error, caused by the dialer just immediately
 	// disconnecting, which we can just ignore.
-	tsTLS.Config.ErrorLog = log.New(ioutil.Discard, "", 0)
+	tsTLS.Config.ErrorLog = log.New(io.Discard, "", 0)
 
 	for _, testURL := range []string{ts.URL, tsTLS.URL} {
 		u, err := newParsedURL(testURL)
 		require.NoError(t, err)
 		dialFn, err := makeHTTPDialer(testURL)
-		require.Nil(t, err)
+		require.NoError(t, err)
 
 		addr, err := dialFn(u.Scheme, u.GetHostWithPath())
 		require.NoError(t, err)
@@ -82,5 +82,33 @@ func Test_parsedURL(t *testing.T) {
 			require.Equal(t, tt.expectedURL, parsed.GetTrimmedURL())
 			require.Equal(t, tt.expectedHostWithPath, parsed.GetHostWithPath())
 		})
+	}
+}
+
+func TestMakeHTTPDialerURL(t *testing.T) {
+	remotes := []string{"https://foo-bar.com", "http://foo-bar.com"}
+
+	for _, remote := range remotes {
+		u, err := newParsedURL(remote)
+		require.NoError(t, err)
+		dialFn, err := makeHTTPDialer(remote)
+		require.NoError(t, err)
+
+		addr, err := dialFn(u.Scheme, u.GetHostWithPath())
+		require.NoError(t, err)
+		require.NotNil(t, addr)
+	}
+
+	errorURLs := []string{"tcp://foo-bar.com", "ftp://foo-bar.com"}
+
+	for _, errorURL := range errorURLs {
+		u, err := newParsedURL(errorURL)
+		require.NoError(t, err)
+		dialFn, err := makeHTTPDialer(errorURL)
+		require.NoError(t, err)
+
+		addr, err := dialFn(u.Scheme, u.GetHostWithPath())
+		require.Error(t, err)
+		require.Nil(t, addr)
 	}
 }

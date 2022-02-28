@@ -22,6 +22,10 @@
 ## Changelog
 
 - April 1, 2021: Initial Draft (@alexanderbez)
+- April 28, 2021: Specify search capabilities are only supported through the KV indexer (@marbar3778)
+- May 19, 2021: Update the SQL schema and the eventsink interface (@jayt106)
+- Aug 30, 2021: Update the SQL schema and the psql implementation (@creachadair)
+- Oct 5, 2021: Clarify goals and implementation changes (@creachadair)
 
 ## Status
 
@@ -70,19 +74,38 @@ the database used.
 We will adopt a similar approach to that of the Cosmos SDK's `KVStore` state
 listening described in [ADR-038](https://github.com/cosmos/cosmos-sdk/blob/master/docs/architecture/adr-038-state-listening.md).
 
-Namely, we will perform the following:
+We will implement the following changes:
 
 - Introduce a new interface, `EventSink`, that all data sinks must implement.
 - Augment the existing `tx_index.indexer` configuration to now accept a series
-  of one or more indexer types, i.e sinks.
+  of one or more indexer types, i.e., sinks.
 - Combine the current `TxIndexer` and `BlockIndexer` into a single `KVEventSink`
   that implements the `EventSink` interface.
-- Introduce an additional `EventSink` that is backed by [PostgreSQL](https://www.postgresql.org/).
-  - Implement the necessary schemas to support both block and transaction event
-  indexing.
+- Introduce an additional `EventSink` implementation that is backed by
+  [PostgreSQL](https://www.postgresql.org/).
+  - Implement the necessary schemas to support both block and transaction event indexing.
 - Update `IndexerService` to use a series of `EventSinks`.
-- Proxy queries to the relevant sink's native query layer.
-- Update all relevant RPC methods.
+
+In addition:
+
+- The Postgres indexer implementation will _not_ implement the proprietary `kv`
+  query language. Users wishing to write queries against the Postgres indexer
+  will connect to the underlying DBMS directly and use SQL queries based on the
+  indexing schema.
+
+  Future custom indexer implementations will not be required to support the
+  proprietary query language either.
+
+- For now, the existing `kv` indexer will be left in place with its current
+  query support, but will be marked as deprecated in a subsequent release, and
+  the documentation will be updated to encourage users who need to query the
+  event index to migrate to the Postgres indexer.
+
+- In the future we may remove the `kv` indexer entirely, or replace it with a
+  different implementation; that decision is deferred as future work.
+
+- In the future, we may remove the index query endpoints from the RPC service
+  entirely; that decision is deferred as future work, but recommended.
 
 
 ## Detailed Design
@@ -95,13 +118,16 @@ The interface is defined as follows:
 ```go
 type EventSink interface {
   IndexBlockEvents(types.EventDataNewBlockHeader) error
-  IndexTxEvents(*abci.TxResult) error
+  IndexTxEvents([]*abci.TxResult) error
 
   SearchBlockEvents(context.Context, *query.Query) ([]int64, error)
   SearchTxEvents(context.Context, *query.Query) ([]*abci.TxResult, error)
 
   GetTxByHash([]byte) (*abci.TxResult, error)
   HasBlock(int64) (bool, error)
+
+  Type() EventSinkType
+  Stop() error
 }
 ```
 
@@ -135,148 +161,195 @@ This type of `EventSink` indexes block and transaction events into a [PostgreSQL
 database. We define and automatically migrate the following schema when the
 `IndexerService` starts.
 
+The postgres eventsink will not support `tx_search`, `block_search`, `GetTxByHash` and `HasBlock`.
+
 ```sql
 -- Table Definition ----------------------------------------------
 
-CREATE TYPE IF NOT EXISTS block_event_type AS ENUM ('begin_block', 'end_block');
+-- The blocks table records metadata about each block.
+-- The block record does not include its events or transactions (see tx_results).
+CREATE TABLE blocks (
+  rowid      BIGSERIAL PRIMARY KEY,
 
-CREATE TABLE IF NOT EXISTS block_events (
-    id SERIAL PRIMARY KEY,
-    key VARCHAR NOT NULL,
-    value VARCHAR NOT NULL,
-    height INTEGER NOT NULL,
-    type block_event_type
+  height     BIGINT NOT NULL,
+  chain_id   VARCHAR NOT NULL,
+
+  -- When this block header was logged into the sink, in UTC.
+  created_at TIMESTAMPTZ NOT NULL,
+
+  UNIQUE (height, chain_id)
 );
 
-CREATE TABLE IF NOT EXISTS tx_results {
-  id SERIAL PRIMARY KEY,
-  tx_result BYTEA NOT NULL
-}
+-- Index blocks by height and chain, since we need to resolve block IDs when
+-- indexing transaction records and transaction events.
+CREATE INDEX idx_blocks_height_chain ON blocks(height, chain_id);
 
-CREATE TABLE IF NOT EXISTS tx_events (
-    id SERIAL PRIMARY KEY,
-    key VARCHAR NOT NULL,
-    value VARCHAR NOT NULL,
-    height INTEGER NOT NULL,
-    hash VARCHAR NOT NULL,
-    FOREIGN KEY (tx_result_id) REFERENCES tx_results(id) ON DELETE CASCADE
+-- The tx_results table records metadata about transaction results.  Note that
+-- the events from a transaction are stored separately.
+CREATE TABLE tx_results (
+  rowid BIGSERIAL PRIMARY KEY,
+
+  -- The block to which this transaction belongs.
+  block_id BIGINT NOT NULL REFERENCES blocks(rowid),
+  -- The sequential index of the transaction within the block.
+  index INTEGER NOT NULL,
+  -- When this result record was logged into the sink, in UTC.
+  created_at TIMESTAMPTZ NOT NULL,
+  -- The hex-encoded hash of the transaction.
+  tx_hash VARCHAR NOT NULL,
+  -- The protobuf wire encoding of the TxResult message.
+  tx_result BYTEA NOT NULL,
+
+  UNIQUE (block_id, index)
 );
 
--- Indices -------------------------------------------------------
+-- The events table records events. All events (both block and transaction) are
+-- associated with a block ID; transaction events also have a transaction ID.
+CREATE TABLE events (
+  rowid BIGSERIAL PRIMARY KEY,
 
-CREATE INDEX idx_block_events_key_value ON block_events(key, value);
-CREATE INDEX idx_tx_events_key_value ON tx_events(key, value);
-CREATE INDEX idx_tx_events_hash ON tx_events(hash);
+  -- The block and transaction this event belongs to.
+  -- If tx_id is NULL, this is a block event.
+  block_id BIGINT NOT NULL REFERENCES blocks(rowid),
+  tx_id    BIGINT NULL REFERENCES tx_results(rowid),
+
+  -- The application-defined type label for the event.
+  type VARCHAR NOT NULL
+);
+
+-- The attributes table records event attributes.
+CREATE TABLE attributes (
+   event_id      BIGINT NOT NULL REFERENCES events(rowid),
+   key           VARCHAR NOT NULL, -- bare key
+   composite_key VARCHAR NOT NULL, -- composed type.key
+   value         VARCHAR NULL,
+
+   UNIQUE (event_id, key)
+);
+
+-- A joined view of events and their attributes. Events that do not have any
+-- attributes are represented as a single row with empty key and value fields.
+CREATE VIEW event_attributes AS
+  SELECT block_id, tx_id, type, key, composite_key, value
+  FROM events LEFT JOIN attributes ON (events.rowid = attributes.event_id);
+
+-- A joined view of all block events (those having tx_id NULL).
+CREATE VIEW block_events AS
+  SELECT blocks.rowid as block_id, height, chain_id, type, key, composite_key, value
+  FROM blocks JOIN event_attributes ON (blocks.rowid = event_attributes.block_id)
+  WHERE event_attributes.tx_id IS NULL;
+
+-- A joined view of all transaction events.
+CREATE VIEW tx_events AS
+  SELECT height, index, chain_id, type, key, composite_key, value, tx_results.created_at
+  FROM blocks JOIN tx_results ON (blocks.rowid = tx_results.block_id)
+  JOIN event_attributes ON (tx_results.rowid = event_attributes.tx_id)
+  WHERE event_attributes.tx_id IS NOT NULL;
 ```
 
 The `PSQLEventSink` will implement the `EventSink` interface as follows
 (some details omitted for brevity):
 
-
 ```go
-func NewPSQLEventSink(connStr string) (*PSQLEventSink, error) {
-  db, err := sql.Open("postgres", connStr)
-  if err != nil {
-    return nil, err
-  }
+func NewEventSink(connStr, chainID string) (*EventSink, error) {
+	db, err := sql.Open(driverName, connStr)
+	// ...
 
-  // ...
+	return &EventSink{
+		store:   db,
+		chainID: chainID,
+	}, nil
 }
 
-func (es *PSQLEventSink) IndexBlockEvents(h types.EventDataNewBlockHeader) error {
-  sqlStmt := sq.Insert("block_events").Columns("key", "value", "height", "type")
+func (es *EventSink) IndexBlockEvents(h types.EventDataNewBlockHeader) error {
+	ts := time.Now().UTC()
 
-  // index the reserved block height index
-  sqlStmt = sqlStmt.Values(types.BlockHeightKey, h.Header.Height, h.Header.Height, "")
+	return runInTransaction(es.store, func(tx *sql.Tx) error {
+		// Add the block to the blocks table and report back its row ID for use
+		// in indexing the events for the block.
+		blockID, err := queryWithID(tx, `
+INSERT INTO blocks (height, chain_id, created_at)
+  VALUES ($1, $2, $3)
+  ON CONFLICT DO NOTHING
+  RETURNING rowid;
+`, h.Header.Height, es.chainID, ts)
+		// ...
 
-  for _, event := range h.ResultBeginBlock.Events {
-    // only index events with a non-empty type
-    if len(event.Type) == 0 {
-      continue
-    }
-
-    for _, attr := range event.Attributes {
-      if len(attr.Key) == 0 {
-        continue
-      }
-
-      // index iff the event specified index:true and it's not a reserved event
-      compositeKey := fmt.Sprintf("%s.%s", event.Type, string(attr.Key))
-      if compositeKey == types.BlockHeightKey {
-        return fmt.Errorf("event type and attribute key \"%s\" is reserved; please use a different key", compositeKey)
-      }
-
-      if attr.GetIndex() {
-        sqlStmt = sqlStmt.Values(compositeKey, string(attr.Value), h.Header.Height, BlockEventTypeBeginBlock)
-      }
-    }
-  }
-
-  // index end_block events...
-  // execute sqlStmt db query...
+		// Insert the special block meta-event for height.
+		if err := insertEvents(tx, blockID, 0, []abci.Event{
+			makeIndexedEvent(types.BlockHeightKey, fmt.Sprint(h.Header.Height)),
+		}); err != nil {
+			return fmt.Errorf("block meta-events: %w", err)
+		}
+		// Insert all the block events. Order is important here,
+		if err := insertEvents(tx, blockID, 0, h.ResultBeginBlock.Events); err != nil {
+			return fmt.Errorf("begin-block events: %w", err)
+		}
+		if err := insertEvents(tx, blockID, 0, h.ResultEndBlock.Events); err != nil {
+			return fmt.Errorf("end-block events: %w", err)
+		}
+		return nil
+	})
 }
 
-func (es *PSQLEventSink) IndexTxEvents(txr *abci.TxResult) error {
-  sqlStmtEvents := sq.Insert("tx_events").Columns("key", "value", "height", "hash", "tx_result_id")
-  sqlStmtTxResult := sq.Insert("tx_results").Columns("tx_result")
+func (es *EventSink) IndexTxEvents(txrs []*abci.TxResult) error {
+	ts := time.Now().UTC()
 
+	for _, txr := range txrs {
+		// Encode the result message in protobuf wire format for indexing.
+		resultData, err := proto.Marshal(txr)
+		// ...
 
-  // store the tx result
-  txBz, err := proto.Marshal(txr)
-  if err != nil {
-    return err
-  }
+		// Index the hash of the underlying transaction as a hex string.
+		txHash := fmt.Sprintf("%X", types.Tx(txr.Tx).Hash())
 
-  sqlStmtTxResult = sqlStmtTxResult.Values(txBz)
+		if err := runInTransaction(es.store, func(tx *sql.Tx) error {
+			// Find the block associated with this transaction.
+			blockID, err := queryWithID(tx, `
+SELECT rowid FROM blocks WHERE height = $1 AND chain_id = $2;
+`, txr.Height, es.chainID)
+			// ...
 
-  // execute sqlStmtTxResult db query...
+			// Insert a record for this tx_result and capture its ID for indexing events.
+			txID, err := queryWithID(tx, `
+INSERT INTO tx_results (block_id, index, created_at, tx_hash, tx_result)
+  VALUES ($1, $2, $3, $4, $5)
+  ON CONFLICT DO NOTHING
+  RETURNING rowid;
+`, blockID, txr.Index, ts, txHash, resultData)
+			// ...
 
-  // index the reserved height and hash indices
-  hash := types.Tx(txr.Tx).Hash()
-  sqlStmtEvents = sqlStmtEvents.Values(types.TxHashKey, hash, txr.Height, hash, txrID)
-  sqlStmtEvents = sqlStmtEvents.Values(types.TxHeightKey, txr.Height, txr.Height, hash, txrID)
+			// Insert the special transaction meta-events for hash and height.
+			if err := insertEvents(tx, blockID, txID, []abci.Event{
+				makeIndexedEvent(types.TxHashKey, txHash),
+				makeIndexedEvent(types.TxHeightKey, fmt.Sprint(txr.Height)),
+			}); err != nil {
+				return fmt.Errorf("indexing transaction meta-events: %w", err)
+			}
+			// Index any events packaged with the transaction.
+			if err := insertEvents(tx, blockID, txID, txr.Result.Events); err != nil {
+				return fmt.Errorf("indexing transaction events: %w", err)
+			}
+			return nil
 
-  for _, event := range result.Result.Events {
-    // only index events with a non-empty type
-    if len(event.Type) == 0 {
-      continue
-    }
-
-    for _, attr := range event.Attributes {
-      if len(attr.Key) == 0 {
-        continue
-      }
-
-      // index if `index: true` is set
-      compositeTag := fmt.Sprintf("%s.%s", event.Type, string(attr.Key))
-			
-      // ensure event does not conflict with a reserved prefix key
-      if compositeTag == types.TxHashKey || compositeTag == types.TxHeightKey {
-        return fmt.Errorf("event type and attribute key \"%s\" is reserved; please use a different key", compositeTag)
-      }
-		
-      if attr.GetIndex() {
-        sqlStmtEvents = sqlStmtEvents.Values(compositeKey, string(attr.Value), txr.Height, hash, txrID)
-      }
-    }
-  }
-
-  // execute sqlStmtEvents db query...
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
-func (es *PSQLEventSink) SearchBlockEvents(ctx context.Context, q *query.Query) ([]int64, error) {
-  sqlStmt = sq.Select("height").Distinct().From("block_events").Where(q.String())
+// SearchBlockEvents is not implemented by this sink, and reports an error for all queries.
+func (es *EventSink) SearchBlockEvents(ctx context.Context, q *query.Query) ([]int64, error)
 
-  // execute sqlStmt db query and scan into integer rows...
-}
+// SearchTxEvents is not implemented by this sink, and reports an error for all queries.
+func (es *EventSink) SearchTxEvents(ctx context.Context, q *query.Query) ([]*abci.TxResult, error)
 
-func (es *PSQLEventSink) SearchTxEvents(ctx context.Context, q *query.Query) ([]*abci.TxResult, error) {
-  sqlStmt = sq.Select("tx_result_id").Distinct().From("tx_events").Where(q.String())
+// GetTxByHash is not implemented by this sink, and reports an error for all queries.
+func (es *EventSink) GetTxByHash(hash []byte) (*abci.TxResult, error)
 
-  // execute sqlStmt db query and scan into integer rows...
-  // query tx_results records and scan into binary slice rows...
-  // decode each row into a TxResult...
-}
+// HasBlock is not implemented by this sink, and reports an error for all queries.
+func (es *EventSink) HasBlock(h int64) (bool, error)
 ```
 
 ### Configuration

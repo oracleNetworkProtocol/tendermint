@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -20,7 +19,7 @@ import (
 
 	"github.com/tendermint/tendermint/config"
 	"github.com/tendermint/tendermint/crypto/ed25519"
-	"github.com/tendermint/tendermint/p2p"
+	"github.com/tendermint/tendermint/libs/log"
 	"github.com/tendermint/tendermint/privval"
 	e2e "github.com/tendermint/tendermint/test/e2e/pkg"
 	"github.com/tendermint/tendermint/types"
@@ -40,7 +39,7 @@ const (
 )
 
 // Setup sets up the testnet configuration.
-func Setup(testnet *e2e.Testnet) error {
+func Setup(logger log.Logger, testnet *e2e.Testnet) error {
 	logger.Info(fmt.Sprintf("Generating testnet files in %q", testnet.Dir))
 
 	err := os.MkdirAll(testnet.Dir, os.ModePerm)
@@ -52,7 +51,7 @@ func Setup(testnet *e2e.Testnet) error {
 	if err != nil {
 		return err
 	}
-	err = ioutil.WriteFile(filepath.Join(testnet.Dir, "docker-compose.yml"), compose, 0644)
+	err = os.WriteFile(filepath.Join(testnet.Dir, "docker-compose.yml"), compose, 0644)
 	if err != nil {
 		return err
 	}
@@ -85,13 +84,15 @@ func Setup(testnet *e2e.Testnet) error {
 		if err != nil {
 			return err
 		}
-		config.WriteConfigFile(nodeDir, cfg) // panics
+		if err := config.WriteConfigFile(nodeDir, cfg); err != nil {
+			return err
+		}
 
 		appCfg, err := MakeAppConfig(node)
 		if err != nil {
 			return err
 		}
-		err = ioutil.WriteFile(filepath.Join(nodeDir, "config", "app.toml"), appCfg, 0644)
+		err = os.WriteFile(filepath.Join(nodeDir, "config", "app.toml"), appCfg, 0644)
 		if err != nil {
 			return err
 		}
@@ -106,22 +107,28 @@ func Setup(testnet *e2e.Testnet) error {
 			return err
 		}
 
-		err = (&p2p.NodeKey{PrivKey: node.NodeKey}).SaveAs(filepath.Join(nodeDir, "config", "node_key.json"))
+		err = (&types.NodeKey{PrivKey: node.NodeKey}).SaveAs(filepath.Join(nodeDir, "config", "node_key.json"))
 		if err != nil {
 			return err
 		}
 
-		(privval.NewFilePV(node.PrivvalKey,
+		err = (privval.NewFilePV(node.PrivvalKey,
 			filepath.Join(nodeDir, PrivvalKeyFile),
 			filepath.Join(nodeDir, PrivvalStateFile),
 		)).Save()
+		if err != nil {
+			return err
+		}
 
 		// Set up a dummy validator. Tendermint requires a file PV even when not used, so we
 		// give it a dummy such that it will fail if it actually tries to use it.
-		(privval.NewFilePV(ed25519.GenPrivKey(),
+		err = (privval.NewFilePV(ed25519.GenPrivKey(),
 			filepath.Join(nodeDir, PrivvalDummyKeyFile),
 			filepath.Join(nodeDir, PrivvalDummyStateFile),
 		)).Save()
+		if err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -238,8 +245,6 @@ func MakeConfig(node *e2e.Node) (*config.Config, error) {
 	cfg.RPC.ListenAddress = "tcp://0.0.0.0:26657"
 	cfg.RPC.PprofListenAddress = ":6060"
 	cfg.P2P.ExternalAddress = fmt.Sprintf("tcp://%v", node.AddressP2P(false))
-	cfg.P2P.AddrBookStrict = false
-	cfg.P2P.UseNewP2P = node.UseNewP2P
 	cfg.P2P.QueueType = node.QueueType
 	cfg.DBBackend = node.Database
 	cfg.StateSync.DiscoveryTime = 5 * time.Second
@@ -266,22 +271,22 @@ func MakeConfig(node *e2e.Node) (*config.Config, error) {
 	// it's actually needed (e.g. for remote KMS or non-validators). We set up a dummy
 	// key here by default, and use the real key for actual validators that should use
 	// the file privval.
-	cfg.PrivValidatorListenAddr = ""
-	cfg.PrivValidatorKey = PrivvalDummyKeyFile
-	cfg.PrivValidatorState = PrivvalDummyStateFile
+	cfg.PrivValidator.ListenAddr = ""
+	cfg.PrivValidator.Key = PrivvalDummyKeyFile
+	cfg.PrivValidator.State = PrivvalDummyStateFile
 
 	switch node.Mode {
 	case e2e.ModeValidator:
 		switch node.PrivvalProtocol {
 		case e2e.ProtocolFile:
-			cfg.PrivValidatorKey = PrivvalKeyFile
-			cfg.PrivValidatorState = PrivvalStateFile
+			cfg.PrivValidator.Key = PrivvalKeyFile
+			cfg.PrivValidator.State = PrivvalStateFile
 		case e2e.ProtocolUNIX:
-			cfg.PrivValidatorListenAddr = PrivvalAddressUNIX
+			cfg.PrivValidator.ListenAddr = PrivvalAddressUNIX
 		case e2e.ProtocolTCP:
-			cfg.PrivValidatorListenAddr = PrivvalAddressTCP
+			cfg.PrivValidator.ListenAddr = PrivvalAddressTCP
 		case e2e.ProtocolGRPC:
-			cfg.PrivValidatorListenAddr = PrivvalAddressGRPC
+			cfg.PrivValidator.ListenAddr = PrivvalAddressGRPC
 		default:
 			return nil, fmt.Errorf("invalid privval protocol setting %q", node.PrivvalProtocol)
 		}
@@ -293,16 +298,13 @@ func MakeConfig(node *e2e.Node) (*config.Config, error) {
 		return nil, fmt.Errorf("unexpected mode %q", node.Mode)
 	}
 
-	if node.FastSync == "" {
-		cfg.FastSyncMode = false
-	} else {
-		cfg.FastSync.Version = node.FastSync
-	}
-
-	if node.StateSync {
+	switch node.StateSync {
+	case e2e.StateSyncP2P:
+		cfg.StateSync.Enable = true
+		cfg.StateSync.UseP2P = true
+	case e2e.StateSyncRPC:
 		cfg.StateSync.Enable = true
 		cfg.StateSync.RPCServers = []string{}
-
 		for _, peer := range node.Testnet.ArchiveNodes() {
 			if peer.Name == node.Name {
 				continue
@@ -315,12 +317,12 @@ func MakeConfig(node *e2e.Node) (*config.Config, error) {
 		}
 	}
 
-	cfg.P2P.Seeds = ""
+	cfg.P2P.Seeds = "" //nolint: staticcheck
 	for _, seed := range node.Seeds {
-		if len(cfg.P2P.Seeds) > 0 {
-			cfg.P2P.Seeds += ","
+		if len(cfg.P2P.Seeds) > 0 { //nolint: staticcheck
+			cfg.P2P.Seeds += "," //nolint: staticcheck
 		}
-		cfg.P2P.Seeds += seed.AddressP2P(true)
+		cfg.P2P.Seeds += seed.AddressP2P(true) //nolint: staticcheck
 	}
 
 	cfg.P2P.PersistentPeers = ""
@@ -410,11 +412,11 @@ func UpdateConfigStateSync(node *e2e.Node, height int64, hash []byte) error {
 
 	// FIXME Apparently there's no function to simply load a config file without
 	// involving the entire Viper apparatus, so we'll just resort to regexps.
-	bz, err := ioutil.ReadFile(cfgPath)
+	bz, err := os.ReadFile(cfgPath)
 	if err != nil {
 		return err
 	}
 	bz = regexp.MustCompile(`(?m)^trust-height =.*`).ReplaceAll(bz, []byte(fmt.Sprintf(`trust-height = %v`, height)))
 	bz = regexp.MustCompile(`(?m)^trust-hash =.*`).ReplaceAll(bz, []byte(fmt.Sprintf(`trust-hash = "%X"`, hash)))
-	return ioutil.WriteFile(cfgPath, bz, 0644)
+	return os.WriteFile(cfgPath, bz, 0644)
 }

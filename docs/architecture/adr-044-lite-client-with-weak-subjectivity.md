@@ -84,7 +84,7 @@ The linear verification algorithm requires downloading all headers
 between the `TrustHeight` and the `LatestHeight`. The lite client downloads the
 full header for the provided `TrustHeight` and then proceeds to download `N+1`
 headers and applies the [Tendermint validation
-rules](https://docs.tendermint.com/master/spec/blockchain/blockchain.html#validation)
+rules](https://github.com/tendermint/tendermint/tree/master/spec/light-client/verification/README.md)
 to each block.
 
 ### Bisecting Verification
@@ -119,11 +119,11 @@ network usage.
 ---
 
 Check out the formal specification
-[here](https://docs.tendermint.com/master/spec/consensus/light-client.html).
+[here](https://github.com/tendermint/tendermint/tree/master/spec/light-client).
 
 ## Status
 
-Accepted.
+Implemented
 
 ## Consequences
 

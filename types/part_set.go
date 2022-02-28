@@ -2,16 +2,16 @@ package types
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"sync"
 
 	"github.com/tendermint/tendermint/crypto/merkle"
 	"github.com/tendermint/tendermint/libs/bits"
 	tmbytes "github.com/tendermint/tendermint/libs/bytes"
-	tmjson "github.com/tendermint/tendermint/libs/json"
 	tmmath "github.com/tendermint/tendermint/libs/math"
-	tmsync "github.com/tendermint/tendermint/libs/sync"
 	tmproto "github.com/tendermint/tendermint/proto/tendermint/types"
 )
 
@@ -151,7 +151,7 @@ type PartSet struct {
 	total uint32
 	hash  []byte
 
-	mtx           tmsync.Mutex
+	mtx           sync.Mutex
 	parts         []*Part
 	partsBitArray *bits.BitArray
 	count         uint32
@@ -365,7 +365,7 @@ func (ps *PartSet) MarshalJSON() ([]byte, error) {
 	ps.mtx.Lock()
 	defer ps.mtx.Unlock()
 
-	return tmjson.Marshal(struct {
+	return json.Marshal(struct {
 		CountTotal    string         `json:"count/total"`
 		PartsBitArray *bits.BitArray `json:"parts_bit_array"`
 	}{

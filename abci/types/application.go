@@ -4,6 +4,7 @@ import (
 	"context"
 )
 
+//go:generate ../../scripts/mockery_generate.sh Application
 // Application is an interface that enables any finite, deterministic state machine
 // to be driven by a blockchain-based replication engine via the ABCI.
 // All methods take a RequestXxx argument and return a ResponseXxx argument,
@@ -17,11 +18,17 @@ type Application interface {
 	CheckTx(RequestCheckTx) ResponseCheckTx // Validate a tx for the mempool
 
 	// Consensus Connection
-	InitChain(RequestInitChain) ResponseInitChain    // Initialize blockchain w validators/other info from TendermintCore
-	BeginBlock(RequestBeginBlock) ResponseBeginBlock // Signals the beginning of a block
-	DeliverTx(RequestDeliverTx) ResponseDeliverTx    // Deliver a tx for full processing
-	EndBlock(RequestEndBlock) ResponseEndBlock       // Signals the end of a block, returns changes to the validator set
-	Commit() ResponseCommit                          // Commit the state and return the application Merkle root hash
+	InitChain(RequestInitChain) ResponseInitChain // Initialize blockchain w validators/other info from TendermintCore
+	PrepareProposal(RequestPrepareProposal) ResponsePrepareProposal
+	ProcessProposal(RequestProcessProposal) ResponseProcessProposal
+	// Commit the state and return the application Merkle root hash
+	Commit() ResponseCommit
+	// Create application specific vote extension
+	ExtendVote(RequestExtendVote) ResponseExtendVote
+	// Verify application's vote extension data
+	VerifyVoteExtension(RequestVerifyVoteExtension) ResponseVerifyVoteExtension
+	// Deliver the decided block with its txs to the Application
+	FinalizeBlock(RequestFinalizeBlock) ResponseFinalizeBlock
 
 	// State Sync Connection
 	ListSnapshots(RequestListSnapshots) ResponseListSnapshots                // List available snapshots
@@ -35,8 +42,7 @@ type Application interface {
 
 var _ Application = (*BaseApplication)(nil)
 
-type BaseApplication struct {
-}
+type BaseApplication struct{}
 
 func NewBaseApplication() *BaseApplication {
 	return &BaseApplication{}
@@ -44,10 +50,6 @@ func NewBaseApplication() *BaseApplication {
 
 func (BaseApplication) Info(req RequestInfo) ResponseInfo {
 	return ResponseInfo{}
-}
-
-func (BaseApplication) DeliverTx(req RequestDeliverTx) ResponseDeliverTx {
-	return ResponseDeliverTx{Code: CodeTypeOK}
 }
 
 func (BaseApplication) CheckTx(req RequestCheckTx) ResponseCheckTx {
@@ -58,20 +60,22 @@ func (BaseApplication) Commit() ResponseCommit {
 	return ResponseCommit{}
 }
 
+func (BaseApplication) ExtendVote(req RequestExtendVote) ResponseExtendVote {
+	return ResponseExtendVote{}
+}
+
+func (BaseApplication) VerifyVoteExtension(req RequestVerifyVoteExtension) ResponseVerifyVoteExtension {
+	return ResponseVerifyVoteExtension{
+		Result: ResponseVerifyVoteExtension_ACCEPT,
+	}
+}
+
 func (BaseApplication) Query(req RequestQuery) ResponseQuery {
 	return ResponseQuery{Code: CodeTypeOK}
 }
 
 func (BaseApplication) InitChain(req RequestInitChain) ResponseInitChain {
 	return ResponseInitChain{}
-}
-
-func (BaseApplication) BeginBlock(req RequestBeginBlock) ResponseBeginBlock {
-	return ResponseBeginBlock{}
-}
-
-func (BaseApplication) EndBlock(req RequestEndBlock) ResponseEndBlock {
-	return ResponseEndBlock{}
 }
 
 func (BaseApplication) ListSnapshots(req RequestListSnapshots) ResponseListSnapshots {
@@ -88,6 +92,24 @@ func (BaseApplication) LoadSnapshotChunk(req RequestLoadSnapshotChunk) ResponseL
 
 func (BaseApplication) ApplySnapshotChunk(req RequestApplySnapshotChunk) ResponseApplySnapshotChunk {
 	return ResponseApplySnapshotChunk{}
+}
+
+func (BaseApplication) PrepareProposal(req RequestPrepareProposal) ResponsePrepareProposal {
+	return ResponsePrepareProposal{}
+}
+
+func (BaseApplication) ProcessProposal(req RequestProcessProposal) ResponseProcessProposal {
+	return ResponseProcessProposal{}
+}
+
+func (BaseApplication) FinalizeBlock(req RequestFinalizeBlock) ResponseFinalizeBlock {
+	txs := make([]*ResponseDeliverTx, len(req.Txs))
+	for i := range req.Txs {
+		txs[i] = &ResponseDeliverTx{Code: CodeTypeOK}
+	}
+	return ResponseFinalizeBlock{
+		Txs: txs,
+	}
 }
 
 //-------------------------------------------------------
@@ -114,11 +136,6 @@ func (app *GRPCApplication) Info(ctx context.Context, req *RequestInfo) (*Respon
 	return &res, nil
 }
 
-func (app *GRPCApplication) DeliverTx(ctx context.Context, req *RequestDeliverTx) (*ResponseDeliverTx, error) {
-	res := app.app.DeliverTx(*req)
-	return &res, nil
-}
-
 func (app *GRPCApplication) CheckTx(ctx context.Context, req *RequestCheckTx) (*ResponseCheckTx, error) {
 	res := app.app.CheckTx(*req)
 	return &res, nil
@@ -136,16 +153,6 @@ func (app *GRPCApplication) Commit(ctx context.Context, req *RequestCommit) (*Re
 
 func (app *GRPCApplication) InitChain(ctx context.Context, req *RequestInitChain) (*ResponseInitChain, error) {
 	res := app.app.InitChain(*req)
-	return &res, nil
-}
-
-func (app *GRPCApplication) BeginBlock(ctx context.Context, req *RequestBeginBlock) (*ResponseBeginBlock, error) {
-	res := app.app.BeginBlock(*req)
-	return &res, nil
-}
-
-func (app *GRPCApplication) EndBlock(ctx context.Context, req *RequestEndBlock) (*ResponseEndBlock, error) {
-	res := app.app.EndBlock(*req)
 	return &res, nil
 }
 
@@ -170,5 +177,35 @@ func (app *GRPCApplication) LoadSnapshotChunk(
 func (app *GRPCApplication) ApplySnapshotChunk(
 	ctx context.Context, req *RequestApplySnapshotChunk) (*ResponseApplySnapshotChunk, error) {
 	res := app.app.ApplySnapshotChunk(*req)
+	return &res, nil
+}
+
+func (app *GRPCApplication) ExtendVote(
+	ctx context.Context, req *RequestExtendVote) (*ResponseExtendVote, error) {
+	res := app.app.ExtendVote(*req)
+	return &res, nil
+}
+
+func (app *GRPCApplication) VerifyVoteExtension(
+	ctx context.Context, req *RequestVerifyVoteExtension) (*ResponseVerifyVoteExtension, error) {
+	res := app.app.VerifyVoteExtension(*req)
+	return &res, nil
+}
+
+func (app *GRPCApplication) PrepareProposal(
+	ctx context.Context, req *RequestPrepareProposal) (*ResponsePrepareProposal, error) {
+	res := app.app.PrepareProposal(*req)
+	return &res, nil
+}
+
+func (app *GRPCApplication) ProcessProposal(
+	ctx context.Context, req *RequestProcessProposal) (*ResponseProcessProposal, error) {
+	res := app.app.ProcessProposal(*req)
+	return &res, nil
+}
+
+func (app *GRPCApplication) FinalizeBlock(
+	ctx context.Context, req *RequestFinalizeBlock) (*ResponseFinalizeBlock, error) {
+	res := app.app.FinalizeBlock(*req)
 	return &res, nil
 }

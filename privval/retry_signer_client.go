@@ -34,15 +34,15 @@ func (sc *RetrySignerClient) IsConnected() bool {
 	return sc.next.IsConnected()
 }
 
-func (sc *RetrySignerClient) WaitForConnection(maxWait time.Duration) error {
-	return sc.next.WaitForConnection(maxWait)
+func (sc *RetrySignerClient) WaitForConnection(ctx context.Context, maxWait time.Duration) error {
+	return sc.next.WaitForConnection(ctx, maxWait)
 }
 
 //--------------------------------------------------------
 // Implement PrivValidator
 
-func (sc *RetrySignerClient) Ping() error {
-	return sc.next.Ping()
+func (sc *RetrySignerClient) Ping(ctx context.Context) error {
+	return sc.next.Ping(ctx)
 }
 
 func (sc *RetrySignerClient) GetPubKey(ctx context.Context) (crypto.PubKey, error) {
@@ -50,6 +50,8 @@ func (sc *RetrySignerClient) GetPubKey(ctx context.Context) (crypto.PubKey, erro
 		pk  crypto.PubKey
 		err error
 	)
+
+	t := time.NewTimer(sc.timeout)
 	for i := 0; i < sc.retries || sc.retries == 0; i++ {
 		pk, err = sc.next.GetPubKey(ctx)
 		if err == nil {
@@ -59,7 +61,12 @@ func (sc *RetrySignerClient) GetPubKey(ctx context.Context) (crypto.PubKey, erro
 		if _, ok := err.(*RemoteSignerError); ok {
 			return nil, err
 		}
-		time.Sleep(sc.timeout)
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-t.C:
+			t.Reset(sc.timeout)
+		}
 	}
 	return nil, fmt.Errorf("exhausted all attempts to get pubkey: %w", err)
 }

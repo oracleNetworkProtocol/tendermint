@@ -1,6 +1,7 @@
 package e2e_test
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -13,12 +14,7 @@ func TestNet_Peers(t *testing.T) {
 	// FIXME Skip test since nodes aren't always able to fully mesh
 	t.SkipNow()
 
-	testNode(t, func(t *testing.T, node e2e.Node) {
-		// Seed nodes shouldn't necessarily mesh with the entire network.
-		if node.Mode == e2e.ModeSeed {
-			return
-		}
-
+	testNode(t, func(ctx context.Context, t *testing.T, node e2e.Node) {
 		client, err := node.Client()
 		require.NoError(t, err)
 		netInfo, err := client.NetInfo(ctx)
@@ -32,11 +28,12 @@ func TestNet_Peers(t *testing.T) {
 			seen[n.Name] = (n.Name == node.Name) // we've clearly seen ourself
 		}
 		for _, peerInfo := range netInfo.Peers {
-			peer := node.Testnet.LookupNode(peerInfo.NodeInfo.Moniker)
-			require.NotNil(t, peer, "unknown node %v", peerInfo.NodeInfo.Moniker)
-			require.Equal(t, peer.IP.String(), peerInfo.RemoteIP,
-				"unexpected IP address for peer %v", peer.Name)
-			seen[peerInfo.NodeInfo.Moniker] = true
+			id := peerInfo.ID
+			peer := node.Testnet.LookupNode(string(id))
+			require.NotNil(t, peer, "unknown node %v", id)
+			require.Contains(t, peerInfo.URL, peer.IP.String(),
+				"unexpected IP address for peer %v", id)
+			seen[string(id)] = true
 		}
 
 		for name := range seen {

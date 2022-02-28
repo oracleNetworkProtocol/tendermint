@@ -2,6 +2,7 @@ package http
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/rand"
 	"net/url"
@@ -11,14 +12,14 @@ import (
 	"github.com/tendermint/tendermint/light/provider"
 	rpcclient "github.com/tendermint/tendermint/rpc/client"
 	rpchttp "github.com/tendermint/tendermint/rpc/client/http"
-	ctypes "github.com/tendermint/tendermint/rpc/core/types"
+	"github.com/tendermint/tendermint/rpc/coretypes"
 	rpctypes "github.com/tendermint/tendermint/rpc/jsonrpc/types"
 	"github.com/tendermint/tendermint/types"
 )
 
 var defaultOptions = Options{
 	MaxRetryAttempts:    5,
-	Timeout:             3 * time.Second,
+	Timeout:             5 * time.Second,
 	NoBlockThreshold:    5,
 	NoResponseThreshold: 5,
 }
@@ -99,7 +100,8 @@ func NewWithClientAndOptions(chainID string, client rpcclient.RemoteClient, opti
 	}
 }
 
-func (p *http) String() string {
+// Identifies the provider with an IP in string format
+func (p *http) ID() string {
 	return fmt.Sprintf("http{%s}", p.client.Remote())
 }
 
@@ -119,6 +121,12 @@ func (p *http) LightBlock(ctx context.Context, height int64) (*types.LightBlock,
 	if height != 0 && sh.Height != height {
 		return nil, provider.ErrBadLightBlock{
 			Reason: fmt.Errorf("height %d responded doesn't match height %d requested", sh.Height, height),
+		}
+	}
+
+	if sh.Header == nil {
+		return nil, provider.ErrBadLightBlock{
+			Reason: errors.New("returned header is nil unexpectedly"),
 		}
 	}
 
@@ -198,9 +206,14 @@ func (p *http) validatorSet(ctx context.Context, height *int64) (*types.Validato
 				return nil, p.parseRPCError(e)
 
 			default:
+				// check if the error stems from the context
+				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+					return nil, err
+				}
+
 				// If we don't know the error then by default we return an unreliable provider error and
 				// terminate the connection with the peer.
-				return nil, provider.ErrUnreliableProvider{Reason: e.Error()}
+				return nil, provider.ErrUnreliableProvider{Reason: e}
 			}
 
 			// update the total and increment the page index so we can fetch the
@@ -229,11 +242,19 @@ func (p *http) signedHeader(ctx context.Context, height *int64) (*types.SignedHe
 			return &commit.SignedHeader, nil
 
 		case *url.Error:
+			// check if the request timed out
 			if e.Timeout() {
 				// we wait and try again with exponential backoff
 				time.Sleep(backoffTimeout(attempt))
 				continue
 			}
+
+			// check if the connection was refused or dropped
+			if strings.Contains(e.Error(), "connection refused") {
+				return nil, provider.ErrConnectionClosed
+			}
+
+			// else, as a catch all, we return the error as a bad light block response
 			return nil, provider.ErrBadLightBlock{Reason: e}
 
 		case *rpctypes.RPCError:
@@ -241,9 +262,14 @@ func (p *http) signedHeader(ctx context.Context, height *int64) (*types.SignedHe
 			return nil, p.parseRPCError(e)
 
 		default:
+			// check if the error stems from the context
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return nil, err
+			}
+
 			// If we don't know the error then by default we return an unreliable provider error and
 			// terminate the connection with the peer.
-			return nil, provider.ErrUnreliableProvider{Reason: e.Error()}
+			return nil, provider.ErrUnreliableProvider{Reason: e}
 		}
 	}
 	return nil, p.noResponse()
@@ -253,7 +279,7 @@ func (p *http) noResponse() error {
 	p.noResponseCount++
 	if p.noResponseCount > p.noResponseThreshold {
 		return provider.ErrUnreliableProvider{
-			Reason: fmt.Sprintf("failed to respond after %d attempts", p.noResponseCount),
+			Reason: fmt.Errorf("failed to respond after %d attempts", p.noResponseCount),
 		}
 	}
 	return provider.ErrNoResponse
@@ -263,7 +289,7 @@ func (p *http) noBlock(e error) error {
 	p.noBlockCount++
 	if p.noBlockCount > p.noBlockThreshold {
 		return provider.ErrUnreliableProvider{
-			Reason: fmt.Sprintf("failed to provide a block after %d attempts", p.noBlockCount),
+			Reason: fmt.Errorf("failed to provide a block after %d attempts", p.noBlockCount),
 		}
 	}
 	return e
@@ -275,11 +301,11 @@ func (p *http) noBlock(e error) error {
 func (p *http) parseRPCError(e *rpctypes.RPCError) error {
 	switch {
 	// 1) check if the error indicates that the peer doesn't have the block
-	case strings.Contains(e.Data, ctypes.ErrHeightNotAvailable.Error()):
+	case strings.Contains(e.Data, coretypes.ErrHeightNotAvailable.Error()):
 		return p.noBlock(provider.ErrLightBlockNotFound)
 
 	// 2) check if the height requested is too high
-	case strings.Contains(e.Data, ctypes.ErrHeightExceedsChainHead.Error()):
+	case strings.Contains(e.Data, coretypes.ErrHeightExceedsChainHead.Error()):
 		return p.noBlock(provider.ErrHeightTooHigh)
 
 	// 3) check if the provider closed the connection

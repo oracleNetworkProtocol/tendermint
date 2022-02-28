@@ -1,20 +1,26 @@
 package server
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
+	"github.com/fortytw2/leaktest"
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/require"
 
 	"github.com/tendermint/tendermint/libs/log"
-	types "github.com/tendermint/tendermint/rpc/jsonrpc/types"
+	rpctypes "github.com/tendermint/tendermint/rpc/jsonrpc/types"
 )
 
 func TestWebsocketManagerHandler(t *testing.T) {
-	s := newWSServer()
+	logger := log.NewNopLogger()
+
+	s := newWSServer(t, logger)
 	defer s.Close()
+
+	t.Cleanup(leaktest.Check(t))
 
 	// check upgrader works
 	d := websocket.Dialer{}
@@ -26,31 +32,29 @@ func TestWebsocketManagerHandler(t *testing.T) {
 	}
 
 	// check basic functionality works
-	req, err := types.MapToRequest(
-		types.JSONRPCStringID("TestWebsocketManager"),
-		"c",
-		map[string]interface{}{"s": "a", "i": 10},
-	)
-	require.NoError(t, err)
-	err = c.WriteJSON(req)
-	require.NoError(t, err)
+	req := rpctypes.NewRequest(1001)
+	require.NoError(t, req.SetMethodAndParams("c", map[string]interface{}{"s": "a", "i": 10}))
+	require.NoError(t, c.WriteJSON(req))
 
-	var resp types.RPCResponse
+	var resp rpctypes.RPCResponse
 	err = c.ReadJSON(&resp)
 	require.NoError(t, err)
 	require.Nil(t, resp.Error)
 	dialResp.Body.Close()
 }
 
-func newWSServer() *httptest.Server {
+func newWSServer(t *testing.T, logger log.Logger) *httptest.Server {
 	funcMap := map[string]*RPCFunc{
-		"c": NewWSRPCFunc(func(ctx *types.Context, s string, i int) (string, error) { return "foo", nil }, "s,i"),
+		"c": NewWSRPCFunc(func(ctx context.Context, s string, i int) (string, error) { return "foo", nil }, "s", "i"),
 	}
-	wm := NewWebsocketManager(funcMap)
-	wm.SetLogger(log.TestingLogger())
+	wm := NewWebsocketManager(logger, funcMap)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/websocket", wm.WebsocketHandler)
 
-	return httptest.NewServer(mux)
+	srv := httptest.NewServer(mux)
+
+	t.Cleanup(srv.Close)
+
+	return srv
 }

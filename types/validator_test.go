@@ -6,10 +6,17 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/tendermint/tendermint/crypto"
 )
 
 func TestValidatorProtoBuf(t *testing.T) {
-	val, _ := RandValidator(true, 100)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	val, _, err := randValidator(ctx, true, 100)
+	require.NoError(t, err)
+
 	testCases := []struct {
 		msg      string
 		v1       *Validator
@@ -40,8 +47,11 @@ func TestValidatorProtoBuf(t *testing.T) {
 }
 
 func TestValidatorValidateBasic(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	priv := NewMockPV()
-	pubKey, _ := priv.GetPubKey(context.Background())
+	pubKey, _ := priv.GetPubKey(ctx)
 	testCases := []struct {
 		val *Validator
 		err bool
@@ -97,4 +107,19 @@ func TestValidatorValidateBasic(t *testing.T) {
 			assert.NoError(t, err)
 		}
 	}
+}
+
+// Testing util functions
+
+// deterministicValidator returns a deterministic validator, useful for testing.
+// UNSTABLE
+func deterministicValidator(ctx context.Context, t *testing.T, key crypto.PrivKey) (*Validator, PrivValidator) {
+	t.Helper()
+	privVal := NewMockPV()
+	privVal.PrivKey = key
+	var votePower int64 = 50
+	pubKey, err := privVal.GetPubKey(ctx)
+	require.NoError(t, err, "could not retrieve pubkey")
+	val := NewValidator(pubKey, votePower)
+	return val, privVal
 }

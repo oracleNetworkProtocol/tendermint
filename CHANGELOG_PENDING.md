@@ -1,90 +1,81 @@
 # Unreleased Changes
 
+Friendly reminder: We have a [bug bounty program](https://hackerone.com/cosmos).
+
 ## vX.X
 
-Special thanks to external contributors on this release:
+Month, DD, YYYY
 
-Friendly reminder: We have a [bug bounty program](https://hackerone.com/tendermint).
+Special thanks to external contributors on this release:
 
 ### BREAKING CHANGES
 
 - CLI/RPC/Config
-  - [config] \#5598 The `test_fuzz` and `test_fuzz_config` P2P settings have been removed. (@erikgrinaker)
-  - [config] \#5728 `fast_sync = "v1"` is no longer supported (@melekes)
-  - [cli] \#5772 `gen_node_key` prints JSON-encoded `NodeKey` rather than ID and does not save it to `node_key.json` (@melekes)
-  - [cli] \#5777 use hyphen-case instead of snake_case for all cli commands and config parameters (@cmwaters)
-  - [rpc] \#6019 standardise RPC errors and return the correct status code (@bipulprasad & @cmwaters)
-  - [rpc] \#6168 Change default sorting to desc for `/tx_search` results (@melekes)
-  - [cli] \#6282 User must specify the node mode when using `tendermint init` (@cmwaters)
+
+  - [rpc] \#7121 Remove the deprecated gRPC interface to the RPC service. (@creachadair)
+  - [blocksync] \#7159 Remove support for disabling blocksync in any circumstance. (@tychoish)
+  - [mempool] \#7171 Remove legacy mempool implementation. (@tychoish)
+  - [rpc] \#7575 Rework how RPC responses are written back via HTTP. (@creachadair)
+  - [rpc] \#7713 Remove unused options for websocket clients. (@creachadair)
+  - [config] \#7930 Add new event subscription options and defaults. (@creachadair)
+  - [rpc] \#7982 Add new Events interface and deprecate Subscribe. (@creachadair)
 
 - Apps
-  - [ABCI] \#5447 Remove `SetOption` method from `ABCI.Client` interface
-  - [ABCI] \#5447 Reset `Oneof` indexes for  `Request` and `Response`.
-  - [ABCI] \#5818 Use protoio for msg length delimitation. Migrates from int64 to uint64 length delimiters.
+
+  - [tendermint/spec] \#7804 Migrate spec from [spec repo](https://github.com/tendermint/spec).
+  - [abci] \#7984 Remove the locks preventing concurrent use of ABCI applications by Tendermint. (@tychoish)
 
 - P2P Protocol
 
+  - [p2p] \#7035 Remove legacy P2P routing implementation and associated configuration options. (@tychoish)
+  - [p2p] \#7265 Peer manager reduces peer score for each failed dial attempts for peers that have not successfully dialed. (@tychoish)
+  - [p2p] [\#7594](https://github.com/tendermint/tendermint/pull/7594) always advertise self, to enable mutual address discovery. (@altergui)
+
 - Go API
-  - [abci/client, proxy] \#5673 `Async` funcs return an error, `Sync` and `Async` funcs accept `context.Context` (@melekes)
-  - [p2p] Removed unused function `MakePoWTarget`. (@erikgrinaker)
-  - [libs/bits] \#5720 Validate `BitArray` in `FromProto`, which now returns an error (@melekes)
-  - [proto/p2p] Renamed `DefaultNodeInfo` and `DefaultNodeInfoOther` to `NodeInfo` and `NodeInfoOther` (@erikgrinaker)
-  - [proto/p2p] Rename `NodeInfo.default_node_id` to `node_id` (@erikgrinaker)
-  - [libs/os] Kill() and {Must,}{Read,Write}File() functions have been removed. (@alessio)
-  - [store] \#5848 Remove block store state in favor of using the db iterators directly (@cmwaters)
-  - [state] \#5864 Use an iterator when pruning state (@cmwaters)
-  - [types] \#6023 Remove `tm2pb.Header`, `tm2pb.BlockID`, `tm2pb.PartSetHeader` and `tm2pb.NewValidatorUpdate`.
-    - Each of the above types has a `ToProto` and `FromProto` method or function which replaced this logic.
-  - [light] \#6054 Move `MaxRetryAttempt` option from client to provider.
-    - `NewWithOptions` now sets the max retry attempts and timeouts (@cmwaters)
-  - [all] \#6077 Change spelling from British English to American (@cmwaters)
-    - Rename "Subscription.Cancelled()" to "Subscription.Canceled()" in libs/pubsub
-    - Rename "behaviour" pkg to "behavior" and internalized it in blockchain v2
-  - [rpc/client/http] \#6176 Remove `endpoint` arg from `New`, `NewWithTimeout` and `NewWithClient` (@melekes)
-  - [rpc/client/http] \#6176 Unexpose `WSEvents` (@melekes)
-  - [rpc/jsonrpc/client/ws_client] \#6176 `NewWS` no longer accepts options (use `NewWSWithOptions` and `OnReconnect` funcs to configure the client) (@melekes)
+
+  - [rpc] \#7474 Remove the "URI" RPC client. (@creachadair)
+  - [libs/pubsub] \#7451 Internalize the pubsub packages. (@creachadair)
+  - [libs/sync] \#7450 Internalize and remove the library. (@creachadair)
+  - [libs/async] \#7449 Move library to internal. (@creachadair)
+  - [pubsub] \#7231 Remove unbuffered subscriptions and rework the Subscription interface. (@creachadair)
+  - [eventbus] \#7231 Move the EventBus type to the internal/eventbus package. (@creachadair)
+  - [blocksync] \#7046 Remove v2 implementation of the blocksync service and recactor, which was disabled in the previous release. (@tychoish)
+  - [p2p] \#7064 Remove WDRR queue implementation. (@tychoish)
+  - [config] \#7169 `WriteConfigFile` now returns an error. (@tychoish)
+  - [libs/service] \#7288 Remove SetLogger method on `service.Service` interface. (@tychoish)
+  - [abci/client] \#7607 Simplify client interface (removes most "async" methods). (@creachadair)
+  - [libs/json] \#7673 Remove the libs/json (tmjson) library. (@creachadair)
 
 - Blockchain Protocol
 
-- Data Storage
-  - [store/state/evidence/light] \#5771 Use an order-preserving varint key encoding (@cmwaters)
-
 ### FEATURES
 
-- [config] Add `--mode` flag and config variable. See [ADR-52](https://github.com/tendermint/tendermint/blob/master/docs/architecture/adr-052-tendermint-mode.md) @dongsam
-- [rpc] /#6329 Don't cap page size in unsafe mode (@gotjoshua, @cmwaters)
+- [rpc] [\#7270](https://github.com/tendermint/tendermint/pull/7270) Add `header` and `header_by_hash` RPC Client queries. (@fedekunze)
+- [rpc] [\#7701] Add `ApplicationInfo` to `status` rpc call which contains the application version. (@jonasbostoen)
+- [cli] [#7033](https://github.com/tendermint/tendermint/pull/7033) Add a `rollback` command to rollback to the previous tendermint state in the event of non-determinstic app hash or reverting an upgrade.
+- [mempool, rpc] \#7041  Add removeTx operation to the RPC layer. (@tychoish)
+- [consensus] \#7354 add a new `synchrony` field to the `ConsensusParameter` struct for controlling the parameters of the proposer-based timestamp algorithm. (@williambanfield)
+- [consensus] \#7376 Update the proposal logic per the Propose-based timestamps specification so that the proposer will wait for the previous block time to occur before proposing the next block. (@williambanfield)
+- [consensus] \#7391 Use the proposed block timestamp as the proposal timestamp. Update the block validation logic to ensure that the proposed block's timestamp matches the timestamp in the proposal message. (@williambanfield)
+- [consensus] \#7415 Update proposal validation logic to Prevote nil if a proposal does not meet the conditions for Timelyness per the proposer-based timestamp specification. (@anca)
+- [consensus] \#7382 Update block validation to no longer require the block timestamp to be the median of the timestamps of the previous commit. (@anca)
+- [consensus] \#7711 Use the proposer timestamp for the first height instead of the genesis time. Chains will still start consensus at the genesis time. (@anca)
 
 ### IMPROVEMENTS
 
-- [crypto/ed25519] \#5632 Adopt zip215 `ed25519` verification. (@marbar3778)
-- [privval] \#5603 Add `--key` to `init`, `gen_validator`, `testnet` & `unsafe_reset_priv_validator` for use in generating `secp256k1` keys.
-- [privval] \#5725 Add gRPC support to private validator.
-- [privval] \#5876 `tendermint show-validator` will query the remote signer if gRPC is being used (@marbar3778)
-- [abci/client] \#5673 `Async` requests return an error if queue is full (@melekes)
-- [mempool] \#5673 Cancel `CheckTx` requests if RPC client disconnects or times out (@melekes)
-- [abci] \#5706 Added `AbciVersion` to `RequestInfo` allowing applications to check ABCI version when connecting to Tendermint. (@marbar3778)
-- [blockchain/v1] \#5728 Remove in favor of v2 (@melekes)
-- [blockchain/v0] \#5741 Relax termination conditions and increase sync timeout (@melekes)
-- [cli] \#5772 `gen_node_key` output now contains node ID (`id` field) (@melekes)
-- [blockchain/v2] \#5774 Send status request when new peer joins (@melekes)
-- [consensus] \#5792 Deprecates the `time_iota_ms` consensus parameter, to reduce the bug surface. The parameter is no longer used. (@valardragon)
-- [store] \#5888 store.SaveBlock saves using batches instead of transactions for now to improve ACID properties. This is a quick fix for underlying issues around tm-db and ACID guarantees. (@githubsands)
-- [consensus] \#5987 Remove `time_iota_ms` from consensus params. Merge `tmproto.ConsensusParams` and `abci.ConsensusParams`. (@marbar3778)
-- [types] \#5994 Reduce the use of protobuf types in core logic. (@marbar3778)
-  - `ConsensusParams`, `BlockParams`, `ValidatorParams`, `EvidenceParams`, `VersionParams`, `sm.Version` and `version.Consensus` have become native types. They still utilize protobuf when being sent over the wire or written to disk.
-- [rpc/client/http] \#6163 Do not drop events even if the `out` channel is full (@melekes)
-- [node] \#6059 Validate and complete genesis doc before saving to state store (@silasdavis)
-- [state] \#6067 Batch save state data (@githubsands & @cmwaters)
-- [crypto] \#6120 Implement batch verification interface for ed25519 and sr25519. (@marbar3778)
-- [types] \#6120 use batch verification for verifying commits signatures. 
-  - If the key type supports the batch verification API it will try to batch verify. If the verification fails we will single verify each signature. 
-- [privval/file] \#6185 Return error on `LoadFilePV`, `LoadFilePVEmptyState`. Allows for better programmatic control of Tendermint.
-- [privval] /#6240 Add `context.Context` to privval interface. 
+- [internal/protoio] \#7325 Optimized `MarshalDelimited` by inlining the common case and using a `sync.Pool` in the worst case. (@odeke-em)
+- [consensus] \#6969 remove logic to 'unlock' a locked block.
+- [evidence] \#7700 Evidence messages contain single Evidence instead of EvidenceList (@jmalicevic)
+- [evidence] \#7802 Evidence pool emits events when evidence is validated and updates a metric when the number of evidence in the evidence pool changes. (@jmalicevic)
+- [pubsub] \#7319 Performance improvements for the event query API (@creachadair)
+- [node] \#7521 Define concrete type for seed node implementation (@spacech1mp)
+- [rpc] \#7612 paginate mempool /unconfirmed_txs rpc endpoint (@spacech1mp)
+- [light] [\#7536](https://github.com/tendermint/tendermint/pull/7536) rpc /status call returns info about the light client (@jmalicevic)
+- [types] \#7765 Replace EvidenceData with EvidenceList to avoid unnecessary nesting of evidence fields within a block. (@jmalicevic)
 
 ### BUG FIXES
 
-- [types] \#5523 Change json naming of `PartSetHeader` within `BlockID` from `parts` to `part_set_header` (@marbar3778)
-- [privval] \#5638 Increase read/write timeout to 5s and calculate ping interval based on it (@JoeKash)
-- [blockchain/v1] [\#5701](https://github.com/tendermint/tendermint/pull/5701) Handle peers without blocks (@melekes)
-- [blockchain/v1] \#5711 Fix deadlock (@melekes)
-- [light] \#6346 Correctly handle too high errors to improve client robustness (@cmwaters)
+- fix: assignment copies lock value in `BitArray.UnmarshalJSON()` (@lklimek)
+- [light] \#7640 Light Client: fix absence proof verification (@ashcherbakov)
+- [light] \#7641 Light Client: fix querying against the latest height (@ashcherbakov)
+- [cli] [#7837](https://github.com/tendermint/tendermint/pull/7837) fix app hash in state rollback. (@yihuang)

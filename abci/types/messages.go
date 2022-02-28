@@ -4,7 +4,8 @@ import (
 	"io"
 
 	"github.com/gogo/protobuf/proto"
-	"github.com/tendermint/tendermint/libs/protoio"
+
+	"github.com/tendermint/tendermint/internal/libs/protoio"
 )
 
 const (
@@ -15,11 +16,7 @@ const (
 func WriteMessage(msg proto.Message, w io.Writer) error {
 	protoWriter := protoio.NewDelimitedWriter(w)
 	_, err := protoWriter.WriteMsg(msg)
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return err
 }
 
 // ReadMessage reads a varint length-delimited protobuf message.
@@ -48,12 +45,6 @@ func ToRequestInfo(req RequestInfo) *Request {
 	}
 }
 
-func ToRequestDeliverTx(req RequestDeliverTx) *Request {
-	return &Request{
-		Value: &Request_DeliverTx{&req},
-	}
-}
-
 func ToRequestCheckTx(req RequestCheckTx) *Request {
 	return &Request{
 		Value: &Request_CheckTx{&req},
@@ -78,18 +69,6 @@ func ToRequestInitChain(req RequestInitChain) *Request {
 	}
 }
 
-func ToRequestBeginBlock(req RequestBeginBlock) *Request {
-	return &Request{
-		Value: &Request_BeginBlock{&req},
-	}
-}
-
-func ToRequestEndBlock(req RequestEndBlock) *Request {
-	return &Request{
-		Value: &Request_EndBlock{&req},
-	}
-}
-
 func ToRequestListSnapshots(req RequestListSnapshots) *Request {
 	return &Request{
 		Value: &Request_ListSnapshots{&req},
@@ -111,6 +90,36 @@ func ToRequestLoadSnapshotChunk(req RequestLoadSnapshotChunk) *Request {
 func ToRequestApplySnapshotChunk(req RequestApplySnapshotChunk) *Request {
 	return &Request{
 		Value: &Request_ApplySnapshotChunk{&req},
+	}
+}
+
+func ToRequestExtendVote(req RequestExtendVote) *Request {
+	return &Request{
+		Value: &Request_ExtendVote{&req},
+	}
+}
+
+func ToRequestVerifyVoteExtension(req RequestVerifyVoteExtension) *Request {
+	return &Request{
+		Value: &Request_VerifyVoteExtension{&req},
+	}
+}
+
+func ToRequestPrepareProposal(req RequestPrepareProposal) *Request {
+	return &Request{
+		Value: &Request_PrepareProposal{&req},
+	}
+}
+
+func ToRequestProcessProposal(req RequestProcessProposal) *Request {
+	return &Request{
+		Value: &Request_ProcessProposal{&req},
+	}
+}
+
+func ToRequestFinalizeBlock(req RequestFinalizeBlock) *Request {
+	return &Request{
+		Value: &Request_FinalizeBlock{&req},
 	}
 }
 
@@ -139,11 +148,6 @@ func ToResponseInfo(res ResponseInfo) *Response {
 		Value: &Response_Info{&res},
 	}
 }
-func ToResponseDeliverTx(res ResponseDeliverTx) *Response {
-	return &Response{
-		Value: &Response_DeliverTx{&res},
-	}
-}
 
 func ToResponseCheckTx(res ResponseCheckTx) *Response {
 	return &Response{
@@ -169,18 +173,6 @@ func ToResponseInitChain(res ResponseInitChain) *Response {
 	}
 }
 
-func ToResponseBeginBlock(res ResponseBeginBlock) *Response {
-	return &Response{
-		Value: &Response_BeginBlock{&res},
-	}
-}
-
-func ToResponseEndBlock(res ResponseEndBlock) *Response {
-	return &Response{
-		Value: &Response_EndBlock{&res},
-	}
-}
-
 func ToResponseListSnapshots(res ResponseListSnapshots) *Response {
 	return &Response{
 		Value: &Response_ListSnapshots{&res},
@@ -202,5 +194,35 @@ func ToResponseLoadSnapshotChunk(res ResponseLoadSnapshotChunk) *Response {
 func ToResponseApplySnapshotChunk(res ResponseApplySnapshotChunk) *Response {
 	return &Response{
 		Value: &Response_ApplySnapshotChunk{&res},
+	}
+}
+
+func ToResponseExtendVote(res ResponseExtendVote) *Response {
+	return &Response{
+		Value: &Response_ExtendVote{&res},
+	}
+}
+
+func ToResponseVerifyVoteExtension(res ResponseVerifyVoteExtension) *Response {
+	return &Response{
+		Value: &Response_VerifyVoteExtension{&res},
+	}
+}
+
+func ToResponsePrepareProposal(res ResponsePrepareProposal) *Response {
+	return &Response{
+		Value: &Response_PrepareProposal{&res},
+	}
+}
+
+func ToResponseProcessProposal(res ResponseProcessProposal) *Response {
+	return &Response{
+		Value: &Response_ProcessProposal{&res},
+	}
+}
+
+func ToResponseFinalizeBlock(res ResponseFinalizeBlock) *Response {
+	return &Response{
+		Value: &Response_FinalizeBlock{&res},
 	}
 }
